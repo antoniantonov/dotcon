@@ -50,7 +50,7 @@ DATABASE_URL=postgresql://user:password@your-cloud-host:5432/dotcon
 
 ## Data Storage
 
-PostgreSQL data is persisted in the `data/` directory (git-ignored). The `countries` table is automatically created and seeded on first run.
+PostgreSQL data is persisted in the `data/pgdata/` directory (git-ignored). The `countries` table is automatically created and seeded on first run.
 
 ## Project Structure
 
