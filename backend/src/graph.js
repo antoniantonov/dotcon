@@ -258,8 +258,8 @@ router.get("/locations", async (_req, res) => {
       name: r.get("loc").properties.name,
       iso_a3: r.get("loc").properties.iso_a3,
       iso_a2: r.get("loc").properties.iso_a2,
-      event_count: r.get("event_count").toNumber ? r.get("event_count").toNumber() : r.get("event_count"),
-      total_money_spend: r.get("total_money_spend").toNumber ? r.get("total_money_spend").toNumber() : r.get("total_money_spend"),
+      event_count: toPlain(r.get("event_count")),
+      total_money_spend: toPlain(r.get("total_money_spend")),
       connected_principals: r.get("connected_principals").filter(Boolean),
       top_topics: r.get("top_topics").filter(Boolean),
     }));
