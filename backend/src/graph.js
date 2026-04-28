@@ -183,14 +183,42 @@ router.get("/path", async (req, res) => {
   }
 });
 
-// GET /api/graph/search?q=term&type=Principal
+const ALLOWED_NODE_LABELS = ["Principal", "Event", "Location", "Topic", "Policy", "Source", "Fact"];
+const ALLOWED_REL_TYPES = [
+  "PERFORMED", "PARTICIPATED_IN", "OCCURRED_IN", "LOCATED_IN",
+  "ASSOCIATED_WITH", "TARGETED", "FUNDED", "RECEIVED_FUNDS",
+  "CONTRACTED_WITH", "SUPPORTED_BY_SOURCE", "ASSERTS", "ABOUT", "RELATED_TO",
+];
+
+// Pre-built parameterized queries for each allowed node label (avoids interpolation)
+const SEARCH_QUERIES_BY_LABEL = Object.fromEntries(
+  ALLOWED_NODE_LABELS.map((label) => [
+    label,
+    `MATCH (n:${label}) WHERE toLower(n.name) CONTAINS toLower($q) OR toLower(n.id) CONTAINS toLower($q) RETURN n LIMIT 20`,
+  ])
+);
+
+// Pre-built MERGE queries for each allowed relationship type (avoids interpolation)
+const MERGE_REL_QUERIES = Object.fromEntries(
+  ALLOWED_REL_TYPES.map((relType) => [
+    relType,
+    `MATCH (a {id: $source_id}), (b {id: $target_id})
+     MERGE (a)-[r:${relType}]->(b)
+     SET r += $props
+     RETURN type(r) AS rel_type, a.id AS source, b.id AS target`,
+  ])
+);
 router.get("/search", async (req, res) => {
   const { q = "", type } = req.query;
   const session = await neo4jClient.getSession();
   try {
     let query, params;
     if (type) {
-      query = `MATCH (n:${type}) WHERE toLower(n.name) CONTAINS toLower($q) OR toLower(n.id) CONTAINS toLower($q) RETURN n LIMIT 20`;
+      if (!ALLOWED_NODE_LABELS.includes(type)) {
+        await session.close();
+        return res.status(400).json({ error: `Node type '${type}' is not allowed` });
+      }
+      query = SEARCH_QUERIES_BY_LABEL[type];
       params = { q };
     } else {
       query = `MATCH (n) WHERE toLower(n.name) CONTAINS toLower($q) OR toLower(n.id) CONTAINS toLower($q) RETURN n LIMIT 20`;
@@ -467,21 +495,13 @@ router.post("/relationships", async (req, res) => {
   if (!source_id || !target_id || !type) {
     return res.status(400).json({ error: "source_id, target_id, and type are required" });
   }
-  const ALLOWED_REL_TYPES = [
-    "PERFORMED", "PARTICIPATED_IN", "OCCURRED_IN", "LOCATED_IN",
-    "ASSOCIATED_WITH", "TARGETED", "FUNDED", "RECEIVED_FUNDS",
-    "CONTRACTED_WITH", "SUPPORTED_BY_SOURCE", "ASSERTS", "ABOUT", "RELATED_TO"
-  ];
   if (!ALLOWED_REL_TYPES.includes(type)) {
     return res.status(400).json({ error: `Relationship type '${type}' is not allowed` });
   }
   const session = await neo4jClient.getWriteSession();
   try {
     const result = await session.run(
-      `MATCH (a {id: $source_id}), (b {id: $target_id})
-       MERGE (a)-[r:${type}]->(b)
-       SET r += $props
-       RETURN type(r) AS rel_type, a.id AS source, b.id AS target`,
+      MERGE_REL_QUERIES[type],
       { source_id, target_id, props: properties || {} }
     );
     if (result.records.length === 0) {
