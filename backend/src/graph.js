@@ -410,6 +410,8 @@ router.get("/map-connections", async (req, res) => {
         sub_type: event.properties.sub_type,
         value: toPlain(event.properties.value),
         currency: event.properties.currency,
+        period_from: toPlain(event.properties.period_from),
+        period_to: toPlain(event.properties.period_to),
         topics,
         principal_name: principal.properties.name,
         event_label: event.properties.label || event.properties.id,

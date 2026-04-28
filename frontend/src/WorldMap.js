@@ -58,6 +58,8 @@ const NODE_COLORS = {
   Policy: "#ff7b7b",
 };
 
+const CONNECTION_COLOR = "#4a9eff";
+
 const STYLE_DEFAULT = {
   fill: "#222",
   stroke: "#333",
@@ -173,6 +175,88 @@ function Tooltip({ info, position }) {
       )}
     </div>
   );
+}
+
+function formatMoney(value, currency) {
+  if (value === null || value === undefined) return "N/A";
+
+  const numericValue = Number(value);
+  if (Number.isNaN(numericValue)) {
+    return [value, currency].filter(Boolean).join(" ");
+  }
+
+  if (currency) {
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 0,
+      }).format(numericValue);
+    } catch (_err) {
+      return `${numericValue.toLocaleString()} ${currency}`;
+    }
+  }
+
+  return numericValue.toLocaleString();
+}
+
+function formatDateRange(connection) {
+  if (connection.period_from && connection.period_to) {
+    return `${connection.period_from} → ${connection.period_to}`;
+  }
+  return connection.period_from || connection.period_to || "N/A";
+}
+
+function ConnectionTooltip({ info, position, color, pinned }) {
+  if (!info) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: position.x + 14,
+        top: position.y - 10,
+        background: "rgba(0,0,0,0.9)",
+        border: `1px solid ${color}`,
+        boxShadow: `0 0 0 1px rgba(255,255,255,0.04), 0 0 18px ${color}44`,
+        borderRadius: "4px",
+        padding: "10px 14px",
+        pointerEvents: "none",
+        zIndex: 1001,
+        minWidth: "190px",
+        backdropFilter: "blur(6px)",
+      }}
+    >
+      <div
+        style={{
+          color: "#fff",
+          fontSize: "12px",
+          fontWeight: 500,
+          letterSpacing: "0.5px",
+          marginBottom: "7px",
+        }}
+      >
+        {pinned ? "Selected connection" : "Connection"}
+      </div>
+      <div style={{ color: "#aaa", fontSize: "11px", lineHeight: 1.7 }}>
+        <div>
+          <span style={{ color: "#666" }}>Principal:</span>{" "}
+          <span style={{ color: "#ddd" }}>{info.principal_name || "N/A"}</span>
+        </div>
+        <div>
+          <span style={{ color: "#666" }}>Value:</span>{" "}
+          <span style={{ color }}>{formatMoney(info.value, info.currency)}</span>
+        </div>
+        <div>
+          <span style={{ color: "#666" }}>Date:</span>{" "}
+          <span style={{ color: "#ddd" }}>{formatDateRange(info)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getConnectionKey(connection, index) {
+  return `${connection.source_node_id || "source"}-${connection.target_node_id || "target"}-${index}`;
 }
 
 const CONTROL_BTN = {
@@ -375,6 +459,8 @@ function WorldMap({ countries, nameAliases = {} }) {
   const [graphAvailable, setGraphAvailable] = useState(false);
   const [filterType, setFilterType] = useState("");
   const [filterValue, setFilterValue] = useState("");
+  const [hoveredConnection, setHoveredConnection] = useState(null);
+  const [selectedConnection, setSelectedConnection] = useState(null);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -394,6 +480,8 @@ function WorldMap({ countries, nameAliases = {} }) {
       .catch(() => {
         setGraphAvailable(false);
         setGraphConnections([]);
+        setHoveredConnection(null);
+        setSelectedConnection(null);
       });
   }, [filterType, filterValue]);
 
@@ -422,6 +510,24 @@ function WorldMap({ countries, nameAliases = {} }) {
     return set;
   }, [graphConnections]);
 
+  const drawableConnections = useMemo(
+    () =>
+      graphConnections
+        .map((connection, index) => ({
+          connection,
+          key: getConnectionKey(connection, index),
+          from: COUNTRY_CENTROIDS[connection.source_iso_a3],
+          to: COUNTRY_CENTROIDS[connection.target_iso_a3],
+        }))
+        .filter(
+          ({ connection, from, to }) =>
+            connection.source_iso_a3 && connection.target_iso_a3 && from && to
+        ),
+    [graphConnections]
+  );
+
+  const activeConnection = selectedConnection || hoveredConnection;
+
   const handleMouseEnter = (geo) => {
     const info = lookupCountry(geo, countries, nameAliases);
     const iso3 = geo.properties.ISO_A3 || geo.properties.iso_a3 || "";
@@ -435,6 +541,43 @@ function WorldMap({ countries, nameAliases = {} }) {
   const handleMouseLeave = () => setTooltipInfo(null);
   const handleMouseMove = (e) => setMousePos({ x: e.clientX, y: e.clientY });
   const handleMoveEnd = (pos) => setPosition(pos);
+
+  const handleConnectionMouseEnter = (connection, key, e) => {
+    setTooltipInfo(null);
+    if (!selectedConnection) {
+      setHoveredConnection({
+        connection,
+        key,
+        position: { x: e.clientX, y: e.clientY },
+      });
+    }
+  };
+
+  const handleConnectionMouseMove = (connection, key, e) => {
+    setTooltipInfo(null);
+    if (!selectedConnection) {
+      setHoveredConnection({
+        connection,
+        key,
+        position: { x: e.clientX, y: e.clientY },
+      });
+    }
+  };
+
+  const handleConnectionMouseLeave = () => {
+    if (!selectedConnection) setHoveredConnection(null);
+  };
+
+  const handleConnectionClick = (connection, key, e) => {
+    e.stopPropagation();
+    setTooltipInfo(null);
+    setHoveredConnection(null);
+    setSelectedConnection({
+      connection,
+      key,
+      position: { x: e.clientX, y: e.clientY },
+    });
+  };
 
   const handleZoomIn = () =>
     setPosition((prev) => ({
@@ -470,14 +613,26 @@ function WorldMap({ countries, nameAliases = {} }) {
   const handleFilterChange = (type, value) => {
     setFilterType(type);
     setFilterValue(value);
+    setHoveredConnection(null);
+    setSelectedConnection(null);
   };
 
   return (
     <div
       style={{ flex: 1, width: "100%", height: "100%", position: "relative" }}
       onMouseMove={handleMouseMove}
+      onClick={() => {
+        setHoveredConnection(null);
+        setSelectedConnection(null);
+      }}
     >
       <Tooltip info={tooltipInfo} position={mousePos} />
+      <ConnectionTooltip
+        info={activeConnection?.connection}
+        position={activeConnection?.position || mousePos}
+        color={CONNECTION_COLOR}
+        pinned={Boolean(selectedConnection)}
+      />
       <GraphFilterDropdown
         filterType={filterType}
         filterValue={filterValue}
@@ -533,25 +688,40 @@ function WorldMap({ countries, nameAliases = {} }) {
                   nameAliases={nameAliases}
                 />
                 {/* Draw connection arcs between countries */}
-                {graphConnections
-                  .filter(
-                    (c) =>
-                      c.source_iso_a3 &&
-                      c.target_iso_a3 &&
-                      COUNTRY_CENTROIDS[c.source_iso_a3] &&
-                      COUNTRY_CENTROIDS[c.target_iso_a3]
-                  )
-                  .map((conn, idx) => (
-                    <Line
-                      key={`arc-${idx}`}
-                      from={COUNTRY_CENTROIDS[conn.source_iso_a3]}
-                      to={COUNTRY_CENTROIDS[conn.target_iso_a3]}
-                      stroke="#4a9eff"
-                      strokeWidth={1.5 / position.zoom}
-                      strokeLinecap="round"
-                      strokeDasharray={`${4 / position.zoom},${3 / position.zoom}`}
-                    />
-                  ))}
+                {drawableConnections.map(({ connection, key, from, to }) => {
+                  const isActive =
+                    selectedConnection?.key === key || hoveredConnection?.key === key;
+                  return (
+                    <React.Fragment key={`connection-${key}`}>
+                      <Line
+                        from={from}
+                        to={to}
+                        stroke="rgba(74,158,255,0)"
+                        strokeWidth={12 / position.zoom}
+                        strokeLinecap="round"
+                        style={{ cursor: "pointer", pointerEvents: "stroke" }}
+                        onMouseEnter={(e) =>
+                          handleConnectionMouseEnter(connection, key, e)
+                        }
+                        onMouseMove={(e) =>
+                          handleConnectionMouseMove(connection, key, e)
+                        }
+                        onMouseLeave={handleConnectionMouseLeave}
+                        onClick={(e) => handleConnectionClick(connection, key, e)}
+                      />
+                      <Line
+                        from={from}
+                        to={to}
+                        stroke={CONNECTION_COLOR}
+                        strokeWidth={(isActive ? 3 : 1.5) / position.zoom}
+                        strokeLinecap="round"
+                        strokeDasharray={`${4 / position.zoom},${3 / position.zoom}`}
+                        opacity={isActive ? 1 : 0.78}
+                        pointerEvents="none"
+                      />
+                    </React.Fragment>
+                  );
+                })}
                 {/* Source (principal) markers */}
                 {graphConnections
                   .filter(
@@ -588,18 +758,6 @@ function WorldMap({ countries, nameAliases = {} }) {
                         stroke="#111"
                         strokeWidth={1 / position.zoom}
                       />
-                      <text
-                        textAnchor="middle"
-                        y={-8 / position.zoom}
-                        style={{
-                          fontSize: `${9 / position.zoom}px`,
-                          fill: "#4a9eff",
-                          fontFamily: "sans-serif",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        {conn.event_label || conn.sub_type || conn.event_type}
-                      </text>
                     </Marker>
                   ))}
               </>

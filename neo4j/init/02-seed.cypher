@@ -52,24 +52,51 @@ SET fact.statement = "Lockheed Martin spent 100000 USD lobbying in the UK from 2
     fact.confidence = 0.95,
     fact.created_at = datetime("2026-04-28T00:00:00Z");
 
+MATCH (lockheed:Principal {id: "principal:lockheed_martin"})
+MATCH (usa:Location {id: "location:usa"})
 MERGE (lockheed)-[located:LOCATED_IN]->(usa)
 SET located.period_from = date("1989-10-01"),
     located.period_to = null,
     located.confidence = 1.0;
 
+MATCH (lockheed:Principal {id: "principal:lockheed_martin"})
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
 MERGE (lockheed)-[performed:PERFORMED]->(event)
 SET performed.role = "spender",
     performed.confidence = 0.95;
 
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
+MATCH (gbr:Location {id: "location:gbr"})
 MERGE (event)-[:OCCURRED_IN]->(gbr);
 
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
+MATCH (lobbying_topic:Topic {id: "topic:lobbying"})
 MERGE (event)-[:ASSOCIATED_WITH]->(lobbying_topic);
+
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
+MATCH (defense_topic:Topic {id: "topic:defense"})
 MERGE (event)-[:ASSOCIATED_WITH]->(defense_topic);
+
+MATCH (lockheed:Principal {id: "principal:lockheed_martin"})
+MATCH (defense_topic:Topic {id: "topic:defense"})
 MERGE (lockheed)-[:ASSOCIATED_WITH]->(defense_topic);
 
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
+MATCH (gbr:Location {id: "location:gbr"})
 MERGE (event)-[:TARGETED]->(gbr);
 
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
+MATCH (source:Source {id: "source:us_lobbying_disclosure:2025q4"})
 MERGE (event)-[:SUPPORTED_BY_SOURCE]->(source);
+
+MATCH (source:Source {id: "source:us_lobbying_disclosure:2025q4"})
+MATCH (fact:Fact {id: "fact:lockheed_spent_100k_lobbying_uk_2025q4"})
 MERGE (source)-[:ASSERTS]->(fact);
+
+MATCH (fact:Fact {id: "fact:lockheed_spent_100k_lobbying_uk_2025q4"})
+MATCH (lockheed:Principal {id: "principal:lockheed_martin"})
 MERGE (fact)-[:ABOUT]->(lockheed);
+
+MATCH (fact:Fact {id: "fact:lockheed_spent_100k_lobbying_uk_2025q4"})
+MATCH (event:Event {id: "event:money_spend:lockheed:lobbying_uk:2025q4"})
 MERGE (fact)-[:ABOUT]->(event);

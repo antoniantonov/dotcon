@@ -52,6 +52,8 @@ services:
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-local-password}
     ports:
       - "${BACKEND_PORT:-4000}:${BACKEND_PORT:-4000}"
+    volumes:
+      - ./neo4j/init:/init-scripts:ro
     depends_on:
       db:
         condition: service_healthy

@@ -44,11 +44,15 @@ async function runConstraintsAndSeed() {
     for (const file of files) {
       if (!file.endsWith(".cypher")) continue;
       const fullPath = path.join(initDir, file);
-      const content = fs.readFileSync(fullPath, "utf8");
+      const content = fs
+        .readFileSync(fullPath, "utf8")
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .join("\n");
       const statements = content
         .split(";")
         .map((s) => s.trim())
-        .filter((s) => s.length > 0 && !s.startsWith("//"));
+        .filter((s) => s.length > 0);
       for (const stmt of statements) {
         await session.run(stmt);
       }

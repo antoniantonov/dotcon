@@ -9,9 +9,18 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const fetchJson = (url) =>
+      fetch(url).then((res) => {
+        if (!res.ok) throw new Error(`Request failed: ${url}`);
+        return res.json();
+      });
+
     Promise.all([
-      fetch(`${API_URL}/api/countries`).then((res) => res.json()),
-      fetch(`${API_URL}/api/country-name-aliases`).then((res) => res.json()),
+      fetchJson(`${API_URL}/api/countries`),
+      fetchJson(`${API_URL}/api/country-name-aliases`).catch((err) => {
+        console.warn("Failed to load country aliases; continuing without aliases:", err);
+        return [];
+      }),
     ])
       .then(([countriesData, aliasesData]) => {
         const map = {};
