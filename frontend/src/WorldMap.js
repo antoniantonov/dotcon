@@ -1,22 +1,62 @@
-  import React, { useState, memo, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useMemo, memo } from "react";
 import {
   ComposableMap,
   Geographies,
   Geography,
   ZoomableGroup,
+  Line,
+  Marker,
 } from "react-simple-maps";
 import { geoMercator, geoPath as d3GeoPath } from "d3-geo";
 
-const GEO_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
+const GEO_URL =
+  "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
-// Must match ComposableMap internals (default width=800, height=600)
-const mapProjection = geoMercator().scale(140).center([0, 30]).translate([400, 300]);
+const mapProjection = geoMercator()
+  .scale(140)
+  .center([0, 30])
+  .translate([400, 300]);
 const pathGenerator = d3GeoPath(mapProjection);
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 20;
 const ZOOM_FACTOR = 1.5;
 const LABEL_MIN_WIDTH = 60;
+
+const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
+
+// Approximate centroids for countries by ISO A3 code
+const COUNTRY_CENTROIDS = {
+  USA: [-98.5, 39.5],
+  GBR: [-3.4, 55.4],
+  DEU: [10.4, 51.2],
+  FRA: [2.2, 46.2],
+  CHN: [104, 35],
+  RUS: [100, 60],
+  IND: [78.9, 20.6],
+  JPN: [138, 36],
+  AUS: [133, -25],
+  CAN: [-96, 60],
+  BRA: [-51.9, -14.2],
+  ZAF: [25, -29],
+  EGY: [30, 26],
+  SAU: [45, 24],
+  ISR: [34.9, 31.5],
+  UKR: [31.2, 49],
+  POL: [19.1, 52],
+  BGR: [25.5, 42.7],
+};
+
+// Node type colors
+const NODE_COLORS = {
+  Principal: "#4a9eff",
+  Event: "#ff9d4a",
+  Location: "#4aff9d",
+  Topic: "#ff4a9d",
+  Fact: "#c97bff",
+  Source: "#ffff4a",
+  Policy: "#ff7b7b",
+};
 
 const STYLE_DEFAULT = {
   fill: "#222",
@@ -40,6 +80,13 @@ const STYLE_PRESSED = {
   outline: "none",
 };
 
+const STYLE_HIGHLIGHTED = {
+  fill: "#1a3a5c",
+  stroke: "#4a9eff",
+  strokeWidth: 0.8,
+  outline: "none",
+};
+
 function lookupCountry(geo, countries, nameAliases) {
   const props = geo.properties;
   const iso3 = props.ISO_A3 || props.iso_a3 || "";
@@ -51,12 +98,13 @@ function lookupCountry(geo, countries, nameAliases) {
     const nameLower = geoName.toLowerCase();
     match = countries[nameLower] || countries[nameAliases[nameLower]];
   }
-  return match || { name: geoName, capital: "N/A", metadata: "this is metadata" };
+  return (
+    match || { name: geoName, capital: "N/A", metadata: "this is metadata" }
+  );
 }
 
 function Tooltip({ info, position }) {
   if (!info) return null;
-
   return (
     <div
       style={{
@@ -84,28 +132,45 @@ function Tooltip({ info, position }) {
       >
         {info.name}
       </div>
-      <div
-        style={{
-          color: "#888",
-          fontSize: "11px",
-          fontWeight: 300,
-          marginBottom: "6px",
-        }}
-      >
-        Capital: {info.capital || "N/A"}
-      </div>
-      <div
-        style={{
-          color: "#555",
-          fontSize: "10px",
-          fontWeight: 300,
-          fontStyle: "italic",
-          borderTop: "1px solid #333",
-          paddingTop: "5px",
-        }}
-      >
-        {info.metadata || "this is metadata"}
-      </div>
+      {info.capital && (
+        <div
+          style={{
+            color: "#888",
+            fontSize: "11px",
+            fontWeight: 300,
+            marginBottom: "6px",
+          }}
+        >
+          Capital: {info.capital}
+        </div>
+      )}
+      {info.graphInfo && (
+        <div
+          style={{
+            color: "#4a9eff",
+            fontSize: "10px",
+            fontWeight: 300,
+            borderTop: "1px solid #333",
+            paddingTop: "5px",
+          }}
+        >
+          {info.graphInfo}
+        </div>
+      )}
+      {!info.graphInfo && info.metadata && (
+        <div
+          style={{
+            color: "#555",
+            fontSize: "10px",
+            fontWeight: 300,
+            fontStyle: "italic",
+            borderTop: "1px solid #333",
+            paddingTop: "5px",
+          }}
+        >
+          {info.metadata}
+        </div>
+      )}
     </div>
   );
 }
@@ -200,45 +265,190 @@ function CountryLabels({ geographies, zoom, countries, nameAliases }) {
   );
 }
 
+function GraphFilterDropdown({ filterType, filterValue, onFilterChange, graphAvailable }) {
+  const filterOptions = [
+    { label: "All connections", type: "", value: "" },
+    { label: "Event: Money Spend", type: "event_type", value: "Money Spend" },
+    { label: "Event: Lobbying", type: "sub_type", value: "Lobbying" },
+    { label: "Principal: Lockheed Martin", type: "principal", value: "Lockheed Martin" },
+    { label: "Topic: Lobbying", type: "topic", value: "Lobbying" },
+    { label: "Topic: Defense", type: "topic", value: "Defense" },
+  ];
+
+  const selected = filterOptions.find(
+    (o) => o.type === filterType && o.value === filterValue
+  ) || filterOptions[0];
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 16,
+        right: 16,
+        zIndex: 200,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        alignItems: "flex-end",
+      }}
+    >
+      <select
+        value={`${selected.type}|${selected.value}`}
+        onChange={(e) => {
+          const [type, value] = e.target.value.split("|");
+          onFilterChange(type, value);
+        }}
+        style={{
+          background: "rgba(0,0,0,0.85)",
+          border: "1px solid #444",
+          borderRadius: 4,
+          color: "#ccc",
+          fontSize: 12,
+          padding: "6px 10px",
+          cursor: "pointer",
+          outline: "none",
+          minWidth: 200,
+        }}
+      >
+        {filterOptions.map((opt) => (
+          <option key={`${opt.type}|${opt.value}`} value={`${opt.type}|${opt.value}`}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      {!graphAvailable && (
+        <div
+          style={{
+            background: "rgba(0,0,0,0.75)",
+            border: "1px solid #333",
+            borderRadius: 4,
+            color: "#666",
+            fontSize: 10,
+            padding: "4px 8px",
+          }}
+        >
+          Graph DB offline
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GraphLegend({ visible, connections }) {
+  if (!visible || connections.length === 0) return null;
+  const types = [...new Set(connections.map((c) => c.sub_type || c.event_type))].filter(Boolean);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 24,
+        left: 24,
+        zIndex: 100,
+        background: "rgba(0,0,0,0.82)",
+        border: "1px solid #333",
+        borderRadius: 4,
+        padding: "10px 14px",
+        color: "#888",
+        fontSize: 11,
+      }}
+    >
+      <div style={{ color: "#ccc", marginBottom: 6, fontSize: 12 }}>Graph Connections</div>
+      {types.map((t) => (
+        <div key={t} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <div style={{ width: 24, height: 2, background: "#4a9eff", borderRadius: 1 }} />
+          <span>{t}</span>
+        </div>
+      ))}
+      <div style={{ marginTop: 6, color: "#555", fontSize: 10 }}>
+        {connections.length} connection{connections.length !== 1 ? "s" : ""}
+      </div>
+    </div>
+  );
+}
+
 function WorldMap({ countries, nameAliases = {} }) {
   const [tooltipInfo, setTooltipInfo] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [position, setPosition] = useState({ coordinates: [0, 30], zoom: 1 });
+  const [graphConnections, setGraphConnections] = useState([]);
+  const [locationSummaries, setLocationSummaries] = useState({});
+  const [graphAvailable, setGraphAvailable] = useState(false);
+  const [filterType, setFilterType] = useState("");
+  const [filterValue, setFilterValue] = useState("");
 
-  const handleMouseEnter = useCallback(
-    (geo) => {
-      setTooltipInfo(lookupCountry(geo, countries, nameAliases));
-    },
-    [countries, nameAliases]
-  );
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (filterType) params.set("filter_type", filterType);
+    if (filterValue) params.set("filter_value", filterValue);
+    const url = `${API_URL}/api/graph/map-connections?${params.toString()}`;
 
-  const handleMouseLeave = useCallback(() => {
-    setTooltipInfo(null);
+    fetch(url)
+      .then((res) => {
+        if (!res.ok) throw new Error("Graph API not available");
+        return res.json();
+      })
+      .then((data) => {
+        setGraphConnections(data.connections || []);
+        setGraphAvailable(true);
+      })
+      .catch(() => {
+        setGraphAvailable(false);
+        setGraphConnections([]);
+      });
+  }, [filterType, filterValue]);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/graph/locations`)
+      .then((res) => {
+        if (!res.ok) return [];
+        return res.json();
+      })
+      .then((data) => {
+        const map = {};
+        (data || []).forEach((loc) => {
+          if (loc.iso_a3) map[loc.iso_a3] = loc;
+        });
+        setLocationSummaries(map);
+      })
+      .catch(() => {});
   }, []);
 
-  const handleMouseMove = useCallback((e) => {
-    setMousePos({ x: e.clientX, y: e.clientY });
-  }, []);
+  const highlightedIsoSet = useMemo(() => {
+    const set = new Set();
+    graphConnections.forEach((c) => {
+      if (c.source_iso_a3) set.add(c.source_iso_a3);
+      if (c.target_iso_a3) set.add(c.target_iso_a3);
+    });
+    return set;
+  }, [graphConnections]);
 
-  const handleMoveEnd = useCallback((pos) => {
-    setPosition(pos);
-  }, []);
+  const handleMouseEnter = (geo) => {
+    const info = lookupCountry(geo, countries, nameAliases);
+    const iso3 = geo.properties.ISO_A3 || geo.properties.iso_a3 || "";
+    const summary = locationSummaries[iso3];
+    if (summary && (summary.event_count > 0 || summary.connected_principals.length > 0)) {
+      info.graphInfo = `${summary.event_count} event(s) · ${summary.connected_principals.join(", ")}`;
+    }
+    setTooltipInfo(info);
+  };
 
-  const handleZoomIn = useCallback(() => {
+  const handleMouseLeave = () => setTooltipInfo(null);
+  const handleMouseMove = (e) => setMousePos({ x: e.clientX, y: e.clientY });
+  const handleMoveEnd = (pos) => setPosition(pos);
+
+  const handleZoomIn = () =>
     setPosition((prev) => ({
       ...prev,
       zoom: Math.min(prev.zoom * ZOOM_FACTOR, MAX_ZOOM),
     }));
-  }, []);
 
-  const handleZoomOut = useCallback(() => {
+  const handleZoomOut = () =>
     setPosition((prev) => ({
       ...prev,
       zoom: Math.max(prev.zoom / ZOOM_FACTOR, MIN_ZOOM),
     }));
-  }, []);
 
-  const handlePan = useCallback((direction) => {
+  const handlePan = (direction) => {
     setPosition((prev) => {
       const step = 30 / prev.zoom;
       const [lng, lat] = prev.coordinates;
@@ -255,7 +465,12 @@ function WorldMap({ countries, nameAliases = {} }) {
           return prev;
       }
     });
-  }, []);
+  };
+
+  const handleFilterChange = (type, value) => {
+    setFilterType(type);
+    setFilterValue(value);
+  };
 
   return (
     <div
@@ -263,11 +478,18 @@ function WorldMap({ countries, nameAliases = {} }) {
       onMouseMove={handleMouseMove}
     >
       <Tooltip info={tooltipInfo} position={mousePos} />
+      <GraphFilterDropdown
+        filterType={filterType}
+        filterValue={filterValue}
+        onFilterChange={handleFilterChange}
+        graphAvailable={graphAvailable}
+      />
       <MapControls
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onPan={handlePan}
       />
+      <GraphLegend visible={graphAvailable} connections={graphConnections} />
       <ComposableMap
         projection="geoMercator"
         projectionConfig={{ scale: 140, center: [0, 30] }}
@@ -283,26 +505,103 @@ function WorldMap({ countries, nameAliases = {} }) {
           <Geographies geography={GEO_URL}>
             {({ geographies }) => (
               <>
-                {geographies.map((geo) => (
-                  <Geography
-                    key={geo.rsmKey}
-                    geography={geo}
-                    onMouseEnter={() => handleMouseEnter(geo)}
-                    onMouseLeave={handleMouseLeave}
-                    vectorEffect="non-scaling-stroke"
-                    style={{
-                      default: STYLE_DEFAULT,
-                      hover: STYLE_HOVER,
-                      pressed: STYLE_PRESSED,
-                    }}
-                  />
-                ))}
+                {geographies.map((geo) => {
+                  const iso3 =
+                    geo.properties.ISO_A3 || geo.properties.iso_a3 || "";
+                  const isHighlighted = highlightedIsoSet.has(iso3);
+                  return (
+                    <Geography
+                      key={geo.rsmKey}
+                      geography={geo}
+                      onMouseEnter={() => handleMouseEnter(geo)}
+                      onMouseLeave={handleMouseLeave}
+                      vectorEffect="non-scaling-stroke"
+                      style={{
+                        default: isHighlighted
+                          ? STYLE_HIGHLIGHTED
+                          : STYLE_DEFAULT,
+                        hover: STYLE_HOVER,
+                        pressed: STYLE_PRESSED,
+                      }}
+                    />
+                  );
+                })}
                 <CountryLabels
                   geographies={geographies}
                   zoom={position.zoom}
                   countries={countries}
                   nameAliases={nameAliases}
                 />
+                {/* Draw connection arcs between countries */}
+                {graphConnections
+                  .filter(
+                    (c) =>
+                      c.source_iso_a3 &&
+                      c.target_iso_a3 &&
+                      COUNTRY_CENTROIDS[c.source_iso_a3] &&
+                      COUNTRY_CENTROIDS[c.target_iso_a3]
+                  )
+                  .map((conn, idx) => (
+                    <Line
+                      key={`arc-${idx}`}
+                      from={COUNTRY_CENTROIDS[conn.source_iso_a3]}
+                      to={COUNTRY_CENTROIDS[conn.target_iso_a3]}
+                      stroke="#4a9eff"
+                      strokeWidth={1.5 / position.zoom}
+                      strokeLinecap="round"
+                      strokeDasharray={`${4 / position.zoom},${3 / position.zoom}`}
+                    />
+                  ))}
+                {/* Source (principal) markers */}
+                {graphConnections
+                  .filter(
+                    (c) =>
+                      c.source_iso_a3 && COUNTRY_CENTROIDS[c.source_iso_a3]
+                  )
+                  .map((conn, idx) => (
+                    <Marker
+                      key={`src-marker-${idx}`}
+                      coordinates={COUNTRY_CENTROIDS[conn.source_iso_a3]}
+                    >
+                      <circle
+                        r={4 / position.zoom}
+                        fill={NODE_COLORS.Principal}
+                        stroke="#111"
+                        strokeWidth={1 / position.zoom}
+                      />
+                    </Marker>
+                  ))}
+                {/* Target (event) markers */}
+                {graphConnections
+                  .filter(
+                    (c) =>
+                      c.target_iso_a3 && COUNTRY_CENTROIDS[c.target_iso_a3]
+                  )
+                  .map((conn, idx) => (
+                    <Marker
+                      key={`tgt-marker-${idx}`}
+                      coordinates={COUNTRY_CENTROIDS[conn.target_iso_a3]}
+                    >
+                      <circle
+                        r={4 / position.zoom}
+                        fill={NODE_COLORS.Event}
+                        stroke="#111"
+                        strokeWidth={1 / position.zoom}
+                      />
+                      <text
+                        textAnchor="middle"
+                        y={-8 / position.zoom}
+                        style={{
+                          fontSize: `${9 / position.zoom}px`,
+                          fill: "#4a9eff",
+                          fontFamily: "sans-serif",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        {conn.event_label || conn.sub_type || conn.event_type}
+                      </text>
+                    </Marker>
+                  ))}
               </>
             )}
           </Geographies>

@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
+const neo4jClient = require("./neo4j");
+const graphRouter = require("./graph");
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -11,6 +13,9 @@ const pool = new Pool({
 
 app.use(cors());
 app.use(express.json());
+
+// Mount graph API routes
+app.use("/api/graph", graphRouter);
 
 app.get("/health", async (_req, res) => {
   try {
@@ -64,4 +69,8 @@ app.get("/api/countries/:iso", async (req, res) => {
 
 app.listen(port, "0.0.0.0", () => {
   console.log(`Backend listening on port ${port}`);
+  // Attempt Neo4j initialization (constraints + seed) after server starts
+  neo4jClient.runConstraintsAndSeed().catch((err) => {
+    console.error("Neo4j init failed (non-fatal):", err.message);
+  });
 });

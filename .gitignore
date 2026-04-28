@@ -1,5 +1,6 @@
 node_modules/
 data/pgdata/
+data/neo4j/
 .env
 *.log
 dist/
