@@ -33,6 +33,18 @@ app.get("/api/countries", async (_req, res) => {
   }
 });
 
+app.get("/api/country-name-aliases", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT alias, canonical_name FROM country_name_aliases ORDER BY alias"
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("Error fetching country name aliases:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 app.get("/api/countries/:iso", async (req, res) => {
   try {
     const iso = req.params.iso.toUpperCase();

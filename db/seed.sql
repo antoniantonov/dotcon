@@ -207,3 +207,24 @@ INSERT INTO countries (name, iso_a2, iso_a3, capital, metadata) VALUES
 ('Somaliland', 'XS', 'SOL', 'Hargeisa', 'this is metadata'),
 ('Northern Cyprus', 'XN', 'XNC', 'North Nicosia', 'this is metadata')
 ON CONFLICT (iso_a3) DO NOTHING;
+
+INSERT INTO country_name_aliases (alias, canonical_name) VALUES
+('dem. rep. congo', 'democratic republic of the congo'),
+('central african rep.', 'central african republic'),
+('s. sudan', 'south sudan'),
+('eq. guinea', 'equatorial guinea'),
+('dominican rep.', 'dominican republic'),
+('bosnia and herz.', 'bosnia and herzegovina'),
+('czech rep.', 'czech republic'),
+('solomon is.', 'solomon islands'),
+('w. sahara', 'western sahara'),
+('côte d''ivoire', 'ivory coast'),
+('falkland is.', 'falkland islands'),
+('n. korea', 'north korea'),
+('s. korea', 'south korea'),
+('lao pdr', 'laos'),
+('n. cyprus', 'northern cyprus'),
+('n. macedonia', 'north macedonia'),
+('marshall is.', 'marshall islands'),
+('eswatini', 'eswatini')
+ON CONFLICT (alias) DO NOTHING;

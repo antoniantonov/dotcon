@@ -5,25 +5,35 @@ const API_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
 
 export default function App() {
   const [countries, setCountries] = useState([]);
+  const [nameAliases, setNameAliases] = useState({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch(`${API_URL}/api/countries`)
-      .then((res) => res.json())
-      .then((data) => {
+    Promise.all([
+      fetch(`${API_URL}/api/countries`).then((res) => res.json()),
+      fetch(`${API_URL}/api/country-name-aliases`).then((res) => res.json()),
+    ])
+      .then(([countriesData, aliasesData]) => {
         const map = {};
-        data.forEach((c) => {
+        countriesData.forEach((c) => {
           map[c.iso_a3] = c;
           map[c.iso_a2] = c;
+          map[c.name.toLowerCase()] = c;
         });
         setCountries(map);
+
+        const aliasMap = {};
+        aliasesData.forEach((a) => {
+          aliasMap[a.alias] = a.canonical_name;
+        });
+        setNameAliases(aliasMap);
         setLoading(false);
       })
       .catch((err) => {
-        console.error("Failed to load countries:", err);
+        console.error("Failed to load data:", err);
         setLoading(false);
       });
-  }, []);
+  }, []); 
 
   return (
     <div style={styles.container}>
@@ -33,7 +43,7 @@ export default function App() {
       {loading ? (
         <div style={styles.loading}>Loading…</div>
       ) : (
-        <WorldMap countries={countries} />
+        <WorldMap countries={countries} nameAliases={nameAliases} />
       )}
     </div>
   );

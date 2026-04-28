@@ -10,3 +10,11 @@ CREATE TABLE IF NOT EXISTS countries (
 
 CREATE INDEX idx_countries_iso_a3 ON countries (iso_a3);
 CREATE INDEX idx_countries_iso_a2 ON countries (iso_a2);
+
+CREATE TABLE IF NOT EXISTS country_name_aliases (
+    id SERIAL PRIMARY KEY,
+    alias VARCHAR(100) NOT NULL UNIQUE,
+    canonical_name VARCHAR(100) NOT NULL
+);
+
+CREATE INDEX idx_country_name_aliases_alias ON country_name_aliases (alias);
