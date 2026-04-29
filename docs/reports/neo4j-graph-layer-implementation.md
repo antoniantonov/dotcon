@@ -18,18 +18,18 @@ This report documents the implementation of the Neo4j graph data layer as descri
 
 - Added `neo4j:5-community` service to `docker-compose.yml`
 - Data is persisted to `./data/neo4j` host volume (mapped to `/data` in container)
-- Init scripts are mounted from `./neo4j/init` to `/init-scripts` in the container
+- Init scripts are mounted from `./db/neo4j/init` to `/init-scripts` in the container
 - Ports: HTTP browser `7474`, Bolt protocol `7687`
 - Health check waits for Neo4j to become ready before backend starts
 - Backend `depends_on` Neo4j with `service_healthy` condition
 
 ### 2. Neo4j Initialization Files
 
-**`neo4j/init/01-constraints.cypher`**
+**`db/neo4j/init/01-constraints.cypher`**
 - Uniqueness constraints for all 7 node label types: `Principal`, `Event`, `Location`, `Topic`, `Policy`, `Source`, `Fact`
 - Uses `IF NOT EXISTS` for idempotent execution
 
-**`neo4j/init/02-seed.cypher`**
+**`db/neo4j/init/02-seed.cypher`**
 - Seeds the Lockheed Martin lobbying example using `MERGE` (safe to run repeatedly)
 - Nodes created:
   - `Principal:Organization:Company` → Lockheed Martin (located in USA)
@@ -136,9 +136,9 @@ Neo4j Community Edition (port 7474 HTTP, 7687 Bolt)
 |---|---|---|
 | `docker-compose.yml` | Modified | Added Neo4j service, updated backend env + depends_on |
 | `.env.example` | Modified | Added Neo4j environment variables |
-| `neo4j/init/01-constraints.cypher` | Created | Uniqueness constraints for all node types |
-| `neo4j/init/02-seed.cypher` | Created | Lockheed Martin lobbying seed data (US→UK) |
-| `neo4j/init.sh` | Created | Shell init script (helper, not required) |
+| `db/neo4j/init/01-constraints.cypher` | Created | Uniqueness constraints for all node types |
+| `db/neo4j/init/02-seed.cypher` | Created | Lockheed Martin lobbying seed data (US→UK) |
+| `db/neo4j/init.sh` | Created | Shell init script (helper, not required) |
 | `backend/package.json` | Modified | Added `neo4j-driver@5` dependency |
 | `backend/src/neo4j.js` | Created | Neo4j connection module |
 | `backend/src/graph.js` | Created | Graph API routes |

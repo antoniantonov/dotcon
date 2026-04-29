@@ -69,7 +69,10 @@ PostgreSQL data is persisted in the `data/pgdata/` directory (git-ignored). The 
 │   └── src/
 │       └── index.js        # API routes and DB connection
 ├── db/                     # Database initialization
-│   ├── init.sql            # Schema (countries table)
-│   └── seed.sql            # Country data seed
+│   ├── pg/                 # PostgreSQL initialization
+│   │   ├── init.sql        # Schema (countries table)
+│   │   └── seed.sql        # Country data seed
+│   └── neo4j/              # Neo4j initialization
+│       └── init/           # Cypher constraints and seed data
 └── data/                   # PostgreSQL data volume (git-ignored)
 ```
