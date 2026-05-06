@@ -5,3 +5,4 @@ data/neo4j/
 *.log
 dist/
 build/
+backend/backend
