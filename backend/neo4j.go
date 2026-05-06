@@ -27,7 +27,7 @@ func initNeo4jDriver() error {
 		neo4j.BasicAuth(user, password, ""),
 		func(cfg *neo4j.Config) {
 			cfg.MaxConnectionPoolSize = 10
-			cfg.ConnectionAcquisitionTimeout = 5000
+			cfg.ConnectionAcquisitionTimeout = 5 * time.Second
 		},
 	)
 	if err != nil {
