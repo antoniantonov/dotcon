@@ -6,3 +6,5 @@ data/neo4j/
 dist/
 build/
 backend/backend
+data/.DS_Store
+.DS_Store
