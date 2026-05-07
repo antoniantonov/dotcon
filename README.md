@@ -7,8 +7,9 @@ Interactive geopolitical world map. Hover over any country to see its name, capi
 | Service   | Tech               | Port |
 |-----------|--------------------|------|
 | frontend  | React + react-simple-maps | 3000 |
-| backend   | Node.js + Express  | 4000 |
+| backend   | Go (gin)           | 4000 |
 | db        | PostgreSQL 16      | 5432 |
+| neo4j     | Neo4j 5 Community  | 7474 / 7687 |
 
 ## Quick Start
 
@@ -39,6 +40,9 @@ All services are configured via environment variables. See `.env.example` for de
 | `BACKEND_PORT` | `4000` | Backend API port |
 | `FRONTEND_PORT` | `3000` | Frontend port |
 | `REACT_APP_API_URL` | `http://localhost:4000` | API URL used by frontend |
+| `NEO4J_URI` | `bolt://neo4j:7687` | Neo4j Bolt URI |
+| `NEO4J_USER` | `neo4j` | Neo4j username |
+| `NEO4J_PASSWORD` | `local-password` | Neo4j password |
 
 ### Connecting to a Cloud PostgreSQL
 
@@ -52,10 +56,12 @@ DATABASE_URL=postgresql://user:password@your-cloud-host:5432/dotcon
 
 PostgreSQL data is persisted in the `data/pgdata/` directory (git-ignored). The `countries` table is automatically created and seeded on first run.
 
+Neo4j data is persisted in the `data/neo4j/` directory (git-ignored). Constraints and seed data are applied automatically on first run.
+
 ## Project Structure
 
 ```
-├── docker-compose.yml      # Orchestration for all 3 services
+├── docker-compose.yml      # Orchestration for all 4 services
 ├── .env.example            # Default environment variables
 ├── frontend/               # React application
 │   ├── Dockerfile
@@ -64,15 +70,18 @@ PostgreSQL data is persisted in the `data/pgdata/` directory (git-ignored). The 
 │   │   ├── WorldMap.js     # Interactive map component
 │   │   └── index.js        # Entry point
 │   └── public/
-├── backend/                # Express API server
+├── backend/                # Go API server (gin)
 │   ├── Dockerfile
-│   └── src/
-│       └── index.js        # API routes and DB connection
+│   ├── go.mod
+│   ├── go.sum
+│   ├── main.go             # Entry point, PostgreSQL handlers
+│   ├── neo4j.go            # Neo4j driver, type helpers, seed runner
+│   └── graph.go            # /api/graph/* handlers
 ├── db/                     # Database initialization
 │   ├── pg/                 # PostgreSQL initialization
 │   │   ├── init.sql        # Schema (countries table)
 │   │   └── seed.sql        # Country data seed
 │   └── neo4j/              # Neo4j initialization
 │       └── init/           # Cypher constraints and seed data
-└── data/                   # PostgreSQL data volume (git-ignored)
+└── data/                   # Data volumes (git-ignored)
 ```
