@@ -183,15 +183,19 @@ MATCH (e11:Event {id: "event:journalist_killing:pse:mohammed_abu_hatab:2023"}),
       (pse:Location {id: "location:pse"})
 MERGE (e11)-[:OCCURRED_IN]->(pse);
 
+MERGE (lbn:Location {id: "location:lbn"})
+SET lbn.name = "Lebanon", lbn.location_type = "Country",
+    lbn.iso_a2 = "LB", lbn.iso_a3 = "LBN";
+
 MERGE (j12:Principal:Journalist {id: "journalist:issam_abdallah"})
 SET j12.name = "Issam Abdallah", j12.principal_type = "Journalist", j12.country = "Lebanon";
-MERGE (e12:Event {id: "event:journalist_killing:pse:issam_abdallah:2023"})
+MERGE (e12:Event {id: "event:journalist_killing:lbn:issam_abdallah:2023"})
 SET e12.event_type = "Journalist Killing", e12.sub_type = "Journalist Killing",
     e12.label = "Killing of Issam Abdallah",
     e12.journalist_name = "Issam Abdallah",
     e12.period_from = date("2023-10-13"), e12.period_to = date("2023-10-13"),
     e12.confidence = 1.0;
 MERGE (j12)<-[:TARGETED]-(e12);
-MATCH (e12:Event {id: "event:journalist_killing:pse:issam_abdallah:2023"}),
-      (pse:Location {id: "location:pse"})
-MERGE (e12)-[:OCCURRED_IN]->(pse);
+MATCH (e12:Event {id: "event:journalist_killing:lbn:issam_abdallah:2023"}),
+      (lbn:Location {id: "location:lbn"})
+MERGE (e12)-[:OCCURRED_IN]->(lbn);
