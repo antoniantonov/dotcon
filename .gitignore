@@ -5,3 +5,5 @@ data/neo4j/
 *.log
 dist/
 build/
+data/.DS_Store
+.DS_Store
