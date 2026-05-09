@@ -7,7 +7,7 @@ import {
   Line,
   Marker,
 } from "react-simple-maps";
-import { geoMercator, geoPath as d3GeoPath } from "d3-geo";
+import { geoMercator, geoPath as d3GeoPath, geoCentroid } from "d3-geo";
 
 const GEO_URL =
   "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
@@ -683,6 +683,7 @@ function aggregateKillingsByLocation(killings) {
 
 function JournalistMarker({
   agg,
+  coords,
   zoom,
   isHovered,
   isSelected,
@@ -691,98 +692,42 @@ function JournalistMarker({
   onMouseLeave,
   onClick,
 }) {
-  const coords = COUNTRY_CENTROIDS[agg.iso_a3];
   if (!coords) return null;
-  // Height is proportional to count, with a minimum so single killings are visible.
-  const height = Math.max(14, 6 + agg.count * 4) / zoom;
-  const baseStrokeWidth = 2 / zoom;
-  const activeStrokeWidth = 4 / zoom;
-  const strokeWidth = isHovered || isSelected ? activeStrokeWidth : baseStrokeWidth;
+  // Vertical bar above the centroid whose length is proportional to the
+  // number of killings, capped at MAX_BAR_UNITS so it doesn't run off-screen.
   const color = "#ff5c5c";
-  const shadowColor = "#7a1d1d";
-  // Fake 3D: a slightly offset shadow line + main line + small base ellipse + count text.
-  const offset = 2 / zoom;
+  const active = isHovered || isSelected;
+  const MAX_BAR_UNITS = 15;
+  const unitHeight = (active ? 9 : 7) / zoom; // matches former dot spacing
+  const barWidth = (active ? 4 : 3) / zoom;
+  const cappedUnits = Math.min(agg.count, MAX_BAR_UNITS);
+  const barHeight = Math.max(unitHeight, cappedUnits * unitHeight);
+  const hitPad = 4 / zoom;
   return (
     <Marker coordinates={coords}>
-      {/* Base shadow at ground */}
-      <ellipse
-        cx={0}
-        cy={0}
-        rx={5 / zoom}
-        ry={1.6 / zoom}
-        fill="rgba(0,0,0,0.55)"
+      <rect
+        x={-barWidth / 2}
+        y={-barHeight}
+        width={barWidth}
+        height={barHeight}
+        fill={color}
+        stroke={active ? "#fff" : "#111"}
+        strokeWidth={(active ? 1 : 0.6) / zoom}
         pointerEvents="none"
       />
-      {/* Shadow line offset (the back face of the bar) */}
-      <line
-        x1={offset}
-        y1={0}
-        x2={offset}
-        y2={-height}
-        stroke={shadowColor}
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        pointerEvents="none"
-      />
-      {/* Top connector to fake 3D depth */}
-      <line
-        x1={0}
-        y1={-height}
-        x2={offset}
-        y2={-height}
-        stroke={shadowColor}
-        strokeWidth={strokeWidth * 0.7}
-        pointerEvents="none"
-      />
-      {/* Main vertical bar */}
-      <line
-        x1={0}
-        y1={0}
-        x2={0}
-        y2={-height}
-        stroke={color}
-        strokeWidth={strokeWidth}
-        strokeLinecap="round"
-        pointerEvents="none"
-        style={{
-          filter: isHovered || isSelected ? `drop-shadow(0 0 4px ${color})` : "none",
-        }}
-      />
-      {/* Wide invisible hit-target so hover/click is easy */}
-      <line
-        x1={0}
-        y1={0}
-        x2={0}
-        y2={-height}
-        stroke="transparent"
-        strokeWidth={Math.max(10 / zoom, strokeWidth + 8 / zoom)}
-        strokeLinecap="round"
-        style={{ cursor: "pointer", pointerEvents: "stroke" }}
+      {/* Wide invisible hit-target spanning the full bar */}
+      <rect
+        x={-Math.max(8 / zoom, barWidth / 2 + hitPad)}
+        y={-barHeight - hitPad}
+        width={Math.max(16 / zoom, barWidth + 2 * hitPad)}
+        height={barHeight + 2 * hitPad}
+        fill="transparent"
+        style={{ cursor: "pointer", pointerEvents: "all" }}
         onMouseEnter={onMouseEnter}
         onMouseMove={onMouseMove}
         onMouseLeave={onMouseLeave}
         onClick={onClick}
       />
-      {/* Count label above the bar */}
-      <text
-        x={0}
-        y={-height - 4 / zoom}
-        textAnchor="middle"
-        style={{
-          fontSize: `${(isHovered || isSelected ? 13 : 11) / zoom}px`,
-          fill: "#fff",
-          fontWeight: isHovered || isSelected ? 700 : 600,
-          paintOrder: "stroke",
-          stroke: "#000",
-          strokeWidth: 2 / zoom,
-          strokeLinejoin: "round",
-          pointerEvents: "none",
-          fontFamily:
-            "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
-        }}
-      >
-        {agg.count}
-      </text>
     </Marker>
   );
 }
@@ -854,12 +799,40 @@ function JournalistsPopup({ agg, position, onClose }) {
             style={{
               padding: "4px 0",
               borderBottom: i < agg.items.length - 1 ? "1px solid #1f1f1f" : "none",
+              display: "grid",
+              gridTemplateColumns: "1fr auto",
+              columnGap: 10,
+              alignItems: "baseline",
             }}
           >
-            <div style={{ color: "#eee" }}>{item.journalist_name || "Unknown"}</div>
-            {item.period_from && (
-              <div style={{ color: "#666", fontSize: 10 }}>{item.period_from}</div>
-            )}
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  color: "#eee",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={item.journalist_name || "Unknown"}
+              >
+                {item.journalist_name || "Unknown"}
+              </div>
+              {item.period_from && (
+                <div style={{ color: "#666", fontSize: 10 }}>{item.period_from}</div>
+              )}
+            </div>
+            <div
+              style={{
+                color: item.reason ? "#ff9d9d" : "#555",
+                fontSize: 11,
+                fontStyle: item.reason ? "normal" : "italic",
+                textAlign: "right",
+                whiteSpace: "nowrap",
+              }}
+              title={item.reason || "No reason recorded"}
+            >
+              {item.reason || "—"}
+            </div>
           </div>
         ))}
       </div>
@@ -1301,7 +1274,19 @@ function WorldMap({ countries, nameAliases = {} }) {
           maxZoom={MAX_ZOOM}
         >
           <Geographies geography={GEO_URL}>
-            {({ geographies }) => (
+            {({ geographies }) => {
+              // Build iso_a3 -> [lon, lat] centroid map from the loaded
+              // world-atlas features. Falls back to the hard-coded
+              // COUNTRY_CENTROIDS for entries that may be missing (e.g.
+              // disputed territories not in the topojson).
+              const centroidByIso = {};
+              geographies.forEach((g) => {
+                const iso = g.properties.ISO_A3 || g.properties.iso_a3;
+                if (iso) centroidByIso[iso] = geoCentroid(g);
+              });
+              const lookupCentroid = (iso) =>
+                centroidByIso[iso] || COUNTRY_CENTROIDS[iso] || null;
+              return (
               <>
                 {geographies.map((geo) => {
                   const iso3 =
@@ -1406,12 +1391,13 @@ function WorldMap({ countries, nameAliases = {} }) {
                         />
                       </Marker>
                     ))}
-                {/* Journalist killings — vertical 3D bars per location */}
+                {/* Journalist killings — vertical stack of dots per location */}
                 {isJournalistView &&
                   killingAggregations.map((agg) => (
                     <JournalistMarker
                       key={`killing-${agg.iso_a3}`}
                       agg={agg}
+                      coords={lookupCentroid(agg.iso_a3)}
                       zoom={position.zoom}
                       isHovered={hoveredKilling?.agg.iso_a3 === agg.iso_a3}
                       isSelected={selectedKilling?.agg.iso_a3 === agg.iso_a3}
@@ -1422,7 +1408,8 @@ function WorldMap({ countries, nameAliases = {} }) {
                     />
                   ))}
               </>
-            )}
+              );
+            }}
           </Geographies>
         </ZoomableGroup>
       </ComposableMap>

@@ -47,6 +47,35 @@ func initPostgres(ctx context.Context) error {
 	return nil
 }
 
+// isoA2ToA3 caches the iso_a2 → iso_a3 mapping from the countries table so
+// graph handlers can derive iso_a3 for nodes that only carry iso_a2 (the
+// fej001 ingest tool only writes iso_a2 on Location:Country nodes).
+// Keys and values are upper-case.
+var isoA2ToA3 = map[string]string{}
+
+// loadIsoMap populates isoA2ToA3 from the countries table. Safe to call after
+// ensurePostgresSchema has run; tolerant of an empty table.
+func loadIsoMap(ctx context.Context) error {
+	rows, err := db.Query(ctx, "SELECT iso_a2, iso_a3 FROM countries")
+	if err != nil {
+		return fmt.Errorf("load iso map: %w", err)
+	}
+	defer rows.Close()
+	m := make(map[string]string, 250)
+	for rows.Next() {
+		var a2, a3 string
+		if err := rows.Scan(&a2, &a3); err != nil {
+			return fmt.Errorf("scan iso row: %w", err)
+		}
+		m[strings.ToUpper(a2)] = strings.ToUpper(a3)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate iso rows: %w", err)
+	}
+	isoA2ToA3 = m
+	return nil
+}
+
 // ensurePostgresSchema creates tables/indices if they do not exist and upserts
 // the country name aliases, mirroring the Node.js ensurePostgresSchema logic.
 func ensurePostgresSchema(ctx context.Context) error {

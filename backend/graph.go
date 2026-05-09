@@ -430,10 +430,10 @@ RETURN e, collect(distinct p) AS principals, loc, ploc`, where)
 	}
 
 	type EventItem struct {
-		Event            map[string]any   `json:"event"`
-		Principals       []map[string]any `json:"principals"`
-		EventLocation    any              `json:"event_location"`
-		PrincipalLocation any             `json:"principal_location"`
+		Event             map[string]any   `json:"event"`
+		Principals        []map[string]any `json:"principals"`
+		EventLocation     any              `json:"event_location"`
+		PrincipalLocation any              `json:"principal_location"`
 	}
 
 	items := make([]EventItem, 0, len(records))
@@ -935,9 +935,16 @@ func graphJournalistKillingsHandler(c *gin.Context) {
 	defer session.Close(ctx)
 
 	// Match either by sub_type or event_type for robustness.
+	// Pull the journalist name either from the Event itself (hand-written seed
+	// in 03-journalists.cypher) or from the linked Journalist node (fej001
+	// ingest writes `(e)-[:TARGETED]->(:Journalist)` and stores `name` there).
 	query := `MATCH (e:Event)-[:OCCURRED_IN]->(loc:Location)
 WHERE e.sub_type = "Journalist Killing" OR e.event_type = "Journalist Killing"
-RETURN e, loc
+OPTIONAL MATCH (e)-[:TARGETED]->(j:Journalist)
+RETURN e, loc, j.name AS journalist_node_name,
+       e.area_coverage AS area_coverage,
+       e.conflict_zone_label AS conflict_zone_label,
+       e.in_conflict_zone AS in_conflict_zone
 ORDER BY e.period_from`
 
 	result, err := session.Run(ctx, query, nil)
@@ -966,7 +973,15 @@ ORDER BY e.period_from`
 
 		journalistName, _ := event.Props["journalist_name"].(string)
 		if journalistName == "" {
-			// Fall back to the event label so the popup is never empty.
+			// fej001 ingest puts the name on the Journalist node, not the Event.
+			if jn, ok := rec.Get("journalist_node_name"); ok {
+				if s, ok := jn.(string); ok {
+					journalistName = s
+				}
+			}
+		}
+		if journalistName == "" {
+			// Final fallback to the event label so the popup is never empty.
 			if lbl, ok := event.Props["label"].(string); ok {
 				journalistName = lbl
 			}
@@ -976,6 +991,35 @@ ORDER BY e.period_from`
 		locIso, _ := loc.Props["iso_a3"].(string)
 		locID, _ := loc.Props["id"].(string)
 
+		// Derive a human-readable "reason" for the killing. Prefer the
+		// topical area_coverage (Crime / Corruption / Environment / …) when
+		// present; otherwise fall back to the conflict-zone label so we
+		// never return a totally empty reason for fej001-ingested rows.
+		var reason string
+		if ac, ok := event.Props["area_coverage"].(string); ok && ac != "" {
+			reason = ac
+		}
+		if reason == "" {
+			if czl, ok := event.Props["conflict_zone_label"].(string); ok && czl != "" {
+				reason = czl
+			}
+		}
+		if reason == "" {
+			if b, ok := event.Props["in_conflict_zone"].(bool); ok && b {
+				reason = "Conflict Zone"
+			}
+		}
+
+		// Fej001-ingested countries only carry iso_a2; derive iso_a3 from the
+		// PG-backed lookup so the frontend (keyed by iso_a3) can render them.
+		if locIso == "" {
+			if a2, ok := loc.Props["iso_a2"].(string); ok && a2 != "" {
+				if a3, found := isoA2ToA3[strings.ToUpper(a2)]; found {
+					locIso = a3
+				}
+			}
+		}
+
 		killings = append(killings, map[string]any{
 			"event_id":        eventID,
 			"journalist_name": journalistName,
@@ -984,6 +1028,7 @@ ORDER BY e.period_from`
 			"iso_a3":          locIso,
 			"period_from":     toPlain(event.Props["period_from"]),
 			"period_to":       toPlain(event.Props["period_to"]),
+			"reason":          reason,
 		})
 	}
 
