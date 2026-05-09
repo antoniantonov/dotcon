@@ -7,7 +7,7 @@ import {
   Line,
   Marker,
 } from "react-simple-maps";
-import { geoMercator, geoPath as d3GeoPath } from "d3-geo";
+import { geoMercator, geoPath as d3GeoPath, geoCentroid } from "d3-geo";
 
 const GEO_URL =
   "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
@@ -45,6 +45,10 @@ const COUNTRY_CENTROIDS = {
   UKR: [31.2, 49],
   POL: [19.1, 52],
   BGR: [25.5, 42.7],
+  MEX: [-102, 23.6],
+  PHL: [122, 13],
+  PSE: [35.2, 31.9],
+  LBN: [35.9, 33.9],
 };
 
 // Node type colors
@@ -349,19 +353,27 @@ function CountryLabels({ geographies, zoom, countries, nameAliases }) {
   );
 }
 
-function GraphFilterDropdown({ filterType, filterValue, onFilterChange, graphAvailable }) {
-  const filterOptions = [
-    { label: "All connections", type: "", value: "" },
-    { label: "Event: Money Spend", type: "event_type", value: "Money Spend" },
-    { label: "Event: Lobbying", type: "sub_type", value: "Lobbying" },
-    { label: "Principal: Lockheed Martin", type: "principal", value: "Lockheed Martin" },
-    { label: "Topic: Lobbying", type: "topic", value: "Lobbying" },
-    { label: "Topic: Defense", type: "topic", value: "Defense" },
-  ];
-
-  const selected = filterOptions.find(
-    (o) => o.type === filterType && o.value === filterValue
-  ) || filterOptions[0];
+function TopRightPicker({
+  types,
+  typeKey,
+  valueKey,
+  values,
+  valuesLoading,
+  onTypeChange,
+  onValueChange,
+  graphAvailable,
+}) {
+  const baseSelectStyle = {
+    background: "rgba(0,0,0,0.85)",
+    border: "1px solid #444",
+    borderRadius: 4,
+    color: "#ccc",
+    fontSize: 12,
+    padding: "6px 10px",
+    cursor: "pointer",
+    outline: "none",
+    minWidth: 160,
+  };
 
   return (
     <div
@@ -376,30 +388,45 @@ function GraphFilterDropdown({ filterType, filterValue, onFilterChange, graphAva
         alignItems: "flex-end",
       }}
     >
-      <select
-        value={`${selected.type}|${selected.value}`}
-        onChange={(e) => {
-          const [type, value] = e.target.value.split("|");
-          onFilterChange(type, value);
-        }}
-        style={{
-          background: "rgba(0,0,0,0.85)",
-          border: "1px solid #444",
-          borderRadius: 4,
-          color: "#ccc",
-          fontSize: 12,
-          padding: "6px 10px",
-          cursor: "pointer",
-          outline: "none",
-          minWidth: 200,
-        }}
-      >
-        {filterOptions.map((opt) => (
-          <option key={`${opt.type}|${opt.value}`} value={`${opt.type}|${opt.value}`}>
-            {opt.label}
+      <div style={{ display: "flex", gap: 6 }}>
+        <select
+          value={typeKey}
+          onChange={(e) => onTypeChange(e.target.value)}
+          style={baseSelectStyle}
+          title="Pick the type of object to display"
+        >
+          <option value="">Type…</option>
+          {types.map((t) => (
+            <option key={t.type} value={t.type}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <select
+          value={valueKey}
+          onChange={(e) => onValueChange(e.target.value)}
+          disabled={!typeKey || valuesLoading}
+          style={{
+            ...baseSelectStyle,
+            opacity: !typeKey || valuesLoading ? 0.5 : 1,
+            cursor: !typeKey || valuesLoading ? "default" : "pointer",
+          }}
+          title={typeKey ? `Pick a ${typeKey}` : "Select a type first"}
+        >
+          <option value="">
+            {!typeKey
+              ? "Select type first"
+              : valuesLoading
+              ? "Loading…"
+              : `All ${typeKey}s`}
           </option>
-        ))}
-      </select>
+          {values.map((v) => (
+            <option key={String(v.value)} value={String(v.value)}>
+              {v.count != null ? `${v.value} (${v.count})` : v.value}
+            </option>
+          ))}
+        </select>
+      </div>
       {!graphAvailable && (
         <div
           style={{
@@ -425,7 +452,7 @@ function GraphLegend({ visible, connections }) {
     <div
       style={{
         position: "absolute",
-        bottom: 24,
+        bottom: 96,
         left: 24,
         zIndex: 100,
         background: "rgba(0,0,0,0.82)",
@@ -450,6 +477,369 @@ function GraphLegend({ visible, connections }) {
   );
 }
 
+// ── Time slider helpers ────────────────────────────────────────────────────────
+
+const SLIDER_TICKS = 200;
+const SLIDER_SCALES = [
+  { label: "5y", years: 5 },
+  { label: "10y", years: 10 },
+  { label: "20y", years: 20 },
+  { label: "50y", years: 50 },
+  { label: "All", years: null },
+];
+const MS_PER_YEAR = 365.25 * 24 * 3600 * 1000;
+const FALLBACK_EARLIEST_MS = Date.UTC(1900, 0, 1);
+
+function parseDateMs(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return value;
+  // Accept YYYY-MM-DD or any value Date can parse.
+  const t = Date.parse(value);
+  return Number.isNaN(t) ? null : t;
+}
+
+function computeSliderRange(scaleYears, allEvents, nowMs) {
+  if (scaleYears != null) {
+    return { startMs: nowMs - scaleYears * MS_PER_YEAR, endMs: nowMs };
+  }
+  // "All time" — take earliest period_from across all events.
+  let earliest = nowMs;
+  for (const e of allEvents) {
+    const f = parseDateMs(e.period_from);
+    if (f != null && f < earliest) earliest = f;
+  }
+  if (earliest === nowMs) earliest = FALLBACK_EARLIEST_MS;
+  return { startMs: earliest, endMs: nowMs };
+}
+
+function formatTimeLabel(ms) {
+  const d = new Date(ms);
+  return d.toISOString().slice(0, 10);
+}
+
+// Returns true if the event is visible at the slider's current time.
+// An event is visible while sliderTime ∈ [period_from, max(period_to, period_from + tickMs)],
+// so events that span less than one tick still show for a tick's worth of time.
+function isEventActive(event, sliderTimeMs, tickMs) {
+  const f = parseDateMs(event.period_from);
+  const t = parseDateMs(event.period_to);
+  if (f == null && t == null) return true; // undated → always visible
+  const start = f != null ? f : t;
+  const rawEnd = t != null ? t : f;
+  const end = Math.max(rawEnd, start + tickMs);
+  return sliderTimeMs >= start && sliderTimeMs <= end;
+}
+
+function TimeSlider({
+  scaleYears,
+  onScaleChange,
+  tick,
+  onTickChange,
+  startMs,
+  endMs,
+  showAll,
+  onShowAllChange,
+}) {
+  const sliderTimeMs = startMs + ((endMs - startMs) * tick) / SLIDER_TICKS;
+  const tickMs = (endMs - startMs) / SLIDER_TICKS;
+  const tickDays = Math.max(1, Math.round(tickMs / (24 * 3600 * 1000)));
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 16,
+        left: 24,
+        right: 24,
+        zIndex: 150,
+        background: "rgba(0,0,0,0.85)",
+        border: "1px solid #333",
+        borderRadius: 6,
+        padding: "10px 16px",
+        color: "#ccc",
+        fontSize: 11,
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        backdropFilter: "blur(6px)",
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          cursor: "pointer",
+          color: showAll ? "#4a9eff" : "#aaa",
+          whiteSpace: "nowrap",
+        }}
+        title="Disable slider and show every selected event"
+      >
+        <input
+          type="checkbox"
+          checked={showAll}
+          onChange={(e) => onShowAllChange(e.target.checked)}
+          style={{ accentColor: "#4a9eff" }}
+        />
+        Show all events
+      </label>
+      <div style={{ display: "flex", gap: 4 }}>
+        {SLIDER_SCALES.map((s) => (
+          <button
+            key={s.label}
+            onClick={() => onScaleChange(s.years)}
+            disabled={showAll}
+            style={{
+              background:
+                scaleYears === s.years && !showAll
+                  ? "rgba(74,158,255,0.25)"
+                  : "rgba(255,255,255,0.04)",
+              color: showAll ? "#555" : scaleYears === s.years ? "#4a9eff" : "#aaa",
+              border: `1px solid ${
+                scaleYears === s.years && !showAll ? "#4a9eff" : "#333"
+              }`,
+              borderRadius: 3,
+              padding: "3px 8px",
+              fontSize: 11,
+              cursor: showAll ? "default" : "pointer",
+              opacity: showAll ? 0.5 : 1,
+            }}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          opacity: showAll ? 0.4 : 1,
+        }}
+      >
+        <span style={{ color: "#666", fontSize: 10, minWidth: 70 }}>
+          {formatTimeLabel(startMs)}
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={SLIDER_TICKS}
+          step={1}
+          value={tick}
+          disabled={showAll}
+          onChange={(e) => onTickChange(Number(e.target.value))}
+          style={{
+            flex: 1,
+            accentColor: "#4a9eff",
+            cursor: showAll ? "default" : "pointer",
+          }}
+        />
+        <span style={{ color: "#666", fontSize: 10, minWidth: 70, textAlign: "right" }}>
+          {formatTimeLabel(endMs)}
+        </span>
+      </div>
+      <div
+        style={{
+          color: showAll ? "#555" : "#4a9eff",
+          fontSize: 11,
+          minWidth: 130,
+          textAlign: "right",
+          whiteSpace: "nowrap",
+        }}
+        title={`1 tick ≈ ${tickDays} day${tickDays !== 1 ? "s" : ""}`}
+      >
+        {showAll ? "All events" : `${formatTimeLabel(sliderTimeMs)} · ${tickDays}d/tick`}
+      </div>
+    </div>
+  );
+}
+
+// ── Journalist killings ────────────────────────────────────────────────────────
+
+function aggregateKillingsByLocation(killings) {
+  // Returns: [{ iso_a3, location_name, count, names: [...], items: [...] }]
+  const byIso = new Map();
+  for (const k of killings) {
+    if (!k.iso_a3) continue;
+    if (!byIso.has(k.iso_a3)) {
+      byIso.set(k.iso_a3, {
+        iso_a3: k.iso_a3,
+        location_name: k.location_name || k.iso_a3,
+        count: 0,
+        names: [],
+        items: [],
+      });
+    }
+    const entry = byIso.get(k.iso_a3);
+    entry.count += 1;
+    entry.names.push(k.journalist_name || "Unknown");
+    entry.items.push(k);
+  }
+  return [...byIso.values()].sort((a, b) => b.count - a.count);
+}
+
+function JournalistMarker({
+  agg,
+  coords,
+  zoom,
+  isHovered,
+  isSelected,
+  onMouseEnter,
+  onMouseMove,
+  onMouseLeave,
+  onClick,
+}) {
+  if (!coords) return null;
+  // Vertical bar above the centroid whose length is proportional to the
+  // number of killings, capped at MAX_BAR_UNITS so it doesn't run off-screen.
+  const color = "#ff5c5c";
+  const active = isHovered || isSelected;
+  const MAX_BAR_UNITS = 15;
+  const unitHeight = (active ? 9 : 7) / zoom; // matches former dot spacing
+  const barWidth = (active ? 4 : 3) / zoom;
+  const cappedUnits = Math.min(agg.count, MAX_BAR_UNITS);
+  const barHeight = Math.max(unitHeight, cappedUnits * unitHeight);
+  const hitPad = 4 / zoom;
+  return (
+    <Marker coordinates={coords}>
+      <rect
+        x={-barWidth / 2}
+        y={-barHeight}
+        width={barWidth}
+        height={barHeight}
+        fill={color}
+        stroke={active ? "#fff" : "#111"}
+        strokeWidth={(active ? 1 : 0.6) / zoom}
+        pointerEvents="none"
+      />
+      {/* Wide invisible hit-target spanning the full bar */}
+      <rect
+        x={-Math.max(8 / zoom, barWidth / 2 + hitPad)}
+        y={-barHeight - hitPad}
+        width={Math.max(16 / zoom, barWidth + 2 * hitPad)}
+        height={barHeight + 2 * hitPad}
+        fill="transparent"
+        style={{ cursor: "pointer", pointerEvents: "all" }}
+        onMouseEnter={onMouseEnter}
+        onMouseMove={onMouseMove}
+        onMouseLeave={onMouseLeave}
+        onClick={onClick}
+      />
+    </Marker>
+  );
+}
+
+function JournalistsPopup({ agg, position, onClose }) {
+  if (!agg) return null;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: Math.min(position.x + 14, window.innerWidth - 320),
+        top: Math.min(position.y - 10, window.innerHeight - 320),
+        background: "rgba(0,0,0,0.92)",
+        border: "1px solid #ff5c5c",
+        boxShadow: "0 0 0 1px rgba(255,255,255,0.04), 0 0 20px rgba(255,92,92,0.35)",
+        borderRadius: 6,
+        padding: "12px 14px",
+        zIndex: 1100,
+        minWidth: 280,
+        maxWidth: 320,
+        backdropFilter: "blur(6px)",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ color: "#fff", fontSize: 13, fontWeight: 500 }}>
+          Journalists killed · {agg.location_name}
+        </div>
+        <button
+          onClick={onClose}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "#888",
+            cursor: "pointer",
+            fontSize: 16,
+            padding: 0,
+            lineHeight: 1,
+          }}
+          aria-label="Close"
+          title="Close"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style={{
+          color: "#ff5c5c",
+          fontSize: 11,
+          marginBottom: 8,
+          paddingBottom: 8,
+          borderBottom: "1px solid #333",
+        }}
+      >
+        Total: {agg.count}
+      </div>
+      <div
+        style={{
+          maxHeight: 220,
+          overflowY: "auto",
+          color: "#ddd",
+          fontSize: 12,
+          lineHeight: 1.7,
+        }}
+      >
+        {agg.items.map((item, i) => (
+          <div
+            key={item.event_id || i}
+            style={{
+              padding: "4px 0",
+              borderBottom: i < agg.items.length - 1 ? "1px solid #1f1f1f" : "none",
+              display: "grid",
+              gridTemplateColumns: "1fr auto",
+              columnGap: 10,
+              alignItems: "baseline",
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  color: "#eee",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                title={item.journalist_name || "Unknown"}
+              >
+                {item.journalist_name || "Unknown"}
+              </div>
+              {item.period_from && (
+                <div style={{ color: "#666", fontSize: 10 }}>{item.period_from}</div>
+              )}
+            </div>
+            <div
+              style={{
+                color: item.reason ? "#ff9d9d" : "#555",
+                fontSize: 11,
+                fontStyle: item.reason ? "normal" : "italic",
+                textAlign: "right",
+                whiteSpace: "nowrap",
+              }}
+              title={item.reason || "No reason recorded"}
+            >
+              {item.reason || "—"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WorldMap({ countries, nameAliases = {} }) {
   const [tooltipInfo, setTooltipInfo] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -457,15 +847,91 @@ function WorldMap({ countries, nameAliases = {} }) {
   const [graphConnections, setGraphConnections] = useState([]);
   const [locationSummaries, setLocationSummaries] = useState({});
   const [graphAvailable, setGraphAvailable] = useState(false);
-  const [filterType, setFilterType] = useState("");
-  const [filterValue, setFilterValue] = useState("");
+
+  // Two-tier picker: pickerType (e.g. "Event") + pickerValue (e.g. "Lobbying").
+  const [pickerType, setPickerType] = useState("");
+  const [pickerValue, setPickerValue] = useState("");
+  const [availableTypes, setAvailableTypes] = useState([]);
+  const [availableValues, setAvailableValues] = useState([]);
+  const [valuesLoading, setValuesLoading] = useState(false);
+
   const [hoveredConnection, setHoveredConnection] = useState(null);
   const [selectedConnection, setSelectedConnection] = useState(null);
 
+  // Journalist killings.
+  const [journalistKillings, setJournalistKillings] = useState([]);
+  const [hoveredKilling, setHoveredKilling] = useState(null);
+  const [selectedKilling, setSelectedKilling] = useState(null);
+
+  // Time slider state.
+  const [scaleYears, setScaleYears] = useState(20);
+  const [sliderTick, setSliderTick] = useState(SLIDER_TICKS); // default: now
+  const [showAllEvents, setShowAllEvents] = useState(false);
+
+  // Stable "now" so sliding doesn't shift the window every render.
+  const nowMsRef = React.useRef(Date.now());
+  const nowMs = nowMsRef.current;
+
+  // Determine if the current selection is the "Journalist Killing" view.
+  const isJournalistView =
+    pickerType === "Event" &&
+    pickerValue.toLowerCase().trim() === "journalist killing";
+
+  // Map (pickerType, pickerValue) → backend filter_type/filter_value for /map-connections.
+  const backendFilter = useMemo(() => {
+    if (isJournalistView) return null; // not used
+    if (!pickerType || !pickerValue) return { filterType: "", filterValue: "" };
+    switch (pickerType) {
+      case "Event":
+        return { filterType: "sub_type", filterValue: pickerValue };
+      case "Principal":
+        return { filterType: "principal", filterValue: pickerValue };
+      case "Topic":
+        return { filterType: "topic", filterValue: pickerValue };
+      default:
+        // Other types (Location/Policy/Source/Fact) don't filter map-connections.
+        return { filterType: "", filterValue: "" };
+    }
+  }, [pickerType, pickerValue, isJournalistView]);
+
+  // Fetch list of types once.
   useEffect(() => {
+    fetch(`${API_URL}/api/graph/types`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => setAvailableTypes(Array.isArray(data) ? data : []))
+      .catch(() => setAvailableTypes([]));
+  }, []);
+
+  // Fetch values for the chosen type whenever it changes.
+  useEffect(() => {
+    if (!pickerType) {
+      setAvailableValues([]);
+      return;
+    }
+    setValuesLoading(true);
+    fetch(`${API_URL}/api/graph/types/${encodeURIComponent(pickerType)}/values`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        setAvailableValues(Array.isArray(data) ? data : []);
+        setValuesLoading(false);
+      })
+      .catch(() => {
+        setAvailableValues([]);
+        setValuesLoading(false);
+      });
+  }, [pickerType]);
+
+  // Fetch connections (skipped in journalist view).
+  useEffect(() => {
+    if (isJournalistView) {
+      setGraphConnections([]);
+      setHoveredConnection(null);
+      setSelectedConnection(null);
+      return;
+    }
     const params = new URLSearchParams();
-    if (filterType) params.set("filter_type", filterType);
-    if (filterValue) params.set("filter_value", filterValue);
+    if (backendFilter.filterType) params.set("filter_type", backendFilter.filterType);
+    if (backendFilter.filterValue) params.set("filter_value", backendFilter.filterValue);
     const url = `${API_URL}/api/graph/map-connections?${params.toString()}`;
 
     fetch(url)
@@ -483,7 +949,27 @@ function WorldMap({ countries, nameAliases = {} }) {
         setHoveredConnection(null);
         setSelectedConnection(null);
       });
-  }, [filterType, filterValue]);
+  }, [backendFilter, isJournalistView]);
+
+  // Fetch journalist killings (only when selected).
+  useEffect(() => {
+    if (!isJournalistView) {
+      setJournalistKillings([]);
+      setHoveredKilling(null);
+      setSelectedKilling(null);
+      return;
+    }
+    fetch(`${API_URL}/api/graph/journalist-killings`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        setJournalistKillings(Array.isArray(data) ? data : []);
+        setGraphAvailable(true);
+      })
+      .catch(() => {
+        setGraphAvailable(false);
+        setJournalistKillings([]);
+      });
+  }, [isJournalistView]);
 
   useEffect(() => {
     fetch(`${API_URL}/api/graph/locations`)
@@ -501,18 +987,53 @@ function WorldMap({ countries, nameAliases = {} }) {
       .catch(() => {});
   }, []);
 
+  // Time-slider window. "All time" derives min from earliest event period_from.
+  const allEventsForRange = useMemo(
+    () => [...graphConnections, ...journalistKillings],
+    [graphConnections, journalistKillings]
+  );
+  const { startMs, endMs } = useMemo(
+    () => computeSliderRange(scaleYears, allEventsForRange, nowMs),
+    [scaleYears, allEventsForRange, nowMs]
+  );
+  const tickMs = (endMs - startMs) / SLIDER_TICKS;
+  const sliderTimeMs = startMs + tickMs * sliderTick;
+
+  // Apply time filter (or pass-through when "Show all events" is checked).
+  const visibleConnections = useMemo(() => {
+    if (showAllEvents || isJournalistView) return graphConnections;
+    return graphConnections.filter((c) => isEventActive(c, sliderTimeMs, tickMs));
+  }, [graphConnections, sliderTimeMs, tickMs, showAllEvents, isJournalistView]);
+
+  const visibleKillings = useMemo(() => {
+    if (!isJournalistView) return [];
+    if (showAllEvents) return journalistKillings;
+    return journalistKillings.filter((k) => isEventActive(k, sliderTimeMs, tickMs));
+  }, [isJournalistView, journalistKillings, sliderTimeMs, tickMs, showAllEvents]);
+
+  const killingAggregations = useMemo(
+    () => aggregateKillingsByLocation(visibleKillings),
+    [visibleKillings]
+  );
+
+
   const highlightedIsoSet = useMemo(() => {
     const set = new Set();
-    graphConnections.forEach((c) => {
+    visibleConnections.forEach((c) => {
       if (c.source_iso_a3) set.add(c.source_iso_a3);
       if (c.target_iso_a3) set.add(c.target_iso_a3);
     });
+    if (isJournalistView) {
+      killingAggregations.forEach((agg) => {
+        if (agg.iso_a3) set.add(agg.iso_a3);
+      });
+    }
     return set;
-  }, [graphConnections]);
+  }, [visibleConnections, killingAggregations, isJournalistView]);
 
   const drawableConnections = useMemo(
     () =>
-      graphConnections
+      visibleConnections
         .map((connection, index) => ({
           connection,
           key: getConnectionKey(connection, index),
@@ -523,7 +1044,7 @@ function WorldMap({ countries, nameAliases = {} }) {
           ({ connection, from, to }) =>
             connection.source_iso_a3 && connection.target_iso_a3 && from && to
         ),
-    [graphConnections]
+    [visibleConnections]
   );
 
   const activeConnection = selectedConnection || hoveredConnection;
@@ -610,11 +1131,54 @@ function WorldMap({ countries, nameAliases = {} }) {
     });
   };
 
-  const handleFilterChange = (type, value) => {
-    setFilterType(type);
-    setFilterValue(value);
+  const handleFilterTypeChange = (newType) => {
+    setPickerType(newType);
+    setPickerValue("");
     setHoveredConnection(null);
     setSelectedConnection(null);
+    setHoveredKilling(null);
+    setSelectedKilling(null);
+  };
+
+  const handleFilterValueChange = (newValue) => {
+    setPickerValue(newValue);
+    setHoveredConnection(null);
+    setSelectedConnection(null);
+    setHoveredKilling(null);
+    setSelectedKilling(null);
+  };
+
+  const handleKillingMouseEnter = (agg, e) => {
+    setTooltipInfo(null);
+    if (!selectedKilling) {
+      setHoveredKilling({
+        agg,
+        position: { x: e.clientX, y: e.clientY },
+      });
+    }
+  };
+
+  const handleKillingMouseMove = (agg, e) => {
+    if (!selectedKilling) {
+      setHoveredKilling({
+        agg,
+        position: { x: e.clientX, y: e.clientY },
+      });
+    }
+  };
+
+  const handleKillingMouseLeave = () => {
+    if (!selectedKilling) setHoveredKilling(null);
+  };
+
+  const handleKillingClick = (agg, e) => {
+    e.stopPropagation();
+    setTooltipInfo(null);
+    setHoveredKilling(null);
+    setSelectedKilling({
+      agg,
+      position: { x: e.clientX, y: e.clientY },
+    });
   };
 
   return (
@@ -624,6 +1188,8 @@ function WorldMap({ countries, nameAliases = {} }) {
       onClick={() => {
         setHoveredConnection(null);
         setSelectedConnection(null);
+        setSelectedKilling(null);
+        setHoveredKilling(null);
       }}
     >
       <Tooltip info={tooltipInfo} position={mousePos} />
@@ -633,10 +1199,47 @@ function WorldMap({ countries, nameAliases = {} }) {
         color={CONNECTION_COLOR}
         pinned={Boolean(selectedConnection)}
       />
-      <GraphFilterDropdown
-        filterType={filterType}
-        filterValue={filterValue}
-        onFilterChange={handleFilterChange}
+      {/* Hover preview popup for journalist marker (no list, just count) */}
+      {hoveredKilling && !selectedKilling && (
+        <div
+          style={{
+            position: "fixed",
+            left: hoveredKilling.position.x + 14,
+            top: hoveredKilling.position.y - 10,
+            background: "rgba(0,0,0,0.9)",
+            border: "1px solid #ff5c5c",
+            borderRadius: 4,
+            padding: "8px 12px",
+            color: "#fff",
+            fontSize: 12,
+            pointerEvents: "none",
+            zIndex: 1050,
+          }}
+        >
+          <div style={{ fontWeight: 500, marginBottom: 2 }}>
+            {hoveredKilling.agg.location_name}
+          </div>
+          <div style={{ color: "#ff5c5c", fontSize: 11 }}>
+            {hoveredKilling.agg.count} journalist
+            {hoveredKilling.agg.count !== 1 ? "s" : ""} killed · click for details
+          </div>
+        </div>
+      )}
+      {selectedKilling && (
+        <JournalistsPopup
+          agg={selectedKilling.agg}
+          position={selectedKilling.position}
+          onClose={() => setSelectedKilling(null)}
+        />
+      )}
+      <TopRightPicker
+        types={availableTypes}
+        typeKey={pickerType}
+        valueKey={pickerValue}
+        values={availableValues}
+        valuesLoading={valuesLoading}
+        onTypeChange={handleFilterTypeChange}
+        onValueChange={handleFilterValueChange}
         graphAvailable={graphAvailable}
       />
       <MapControls
@@ -644,7 +1247,20 @@ function WorldMap({ countries, nameAliases = {} }) {
         onZoomOut={handleZoomOut}
         onPan={handlePan}
       />
-      <GraphLegend visible={graphAvailable} connections={graphConnections} />
+      <GraphLegend visible={graphAvailable && !isJournalistView} connections={visibleConnections} />
+      <TimeSlider
+        scaleYears={scaleYears}
+        onScaleChange={(y) => {
+          setScaleYears(y);
+          setSliderTick(SLIDER_TICKS); // reset to "now" end of new range
+        }}
+        tick={sliderTick}
+        onTickChange={setSliderTick}
+        startMs={startMs}
+        endMs={endMs}
+        showAll={showAllEvents}
+        onShowAllChange={setShowAllEvents}
+      />
       <ComposableMap
         projection="geoMercator"
         projectionConfig={{ scale: 140, center: [0, 30] }}
@@ -658,7 +1274,19 @@ function WorldMap({ countries, nameAliases = {} }) {
           maxZoom={MAX_ZOOM}
         >
           <Geographies geography={GEO_URL}>
-            {({ geographies }) => (
+            {({ geographies }) => {
+              // Build iso_a3 -> [lon, lat] centroid map from the loaded
+              // world-atlas features. Falls back to the hard-coded
+              // COUNTRY_CENTROIDS for entries that may be missing (e.g.
+              // disputed territories not in the topojson).
+              const centroidByIso = {};
+              geographies.forEach((g) => {
+                const iso = g.properties.ISO_A3 || g.properties.iso_a3;
+                if (iso) centroidByIso[iso] = geoCentroid(g);
+              });
+              const lookupCentroid = (iso) =>
+                centroidByIso[iso] || COUNTRY_CENTROIDS[iso] || null;
+              return (
               <>
                 {geographies.map((geo) => {
                   const iso3 =
@@ -688,80 +1316,100 @@ function WorldMap({ countries, nameAliases = {} }) {
                   nameAliases={nameAliases}
                 />
                 {/* Draw connection arcs between countries */}
-                {drawableConnections.map(({ connection, key, from, to }) => {
-                  const isActive =
-                    selectedConnection?.key === key || hoveredConnection?.key === key;
-                  return (
-                    <React.Fragment key={`connection-${key}`}>
-                      <Line
-                        from={from}
-                        to={to}
-                        stroke="rgba(74,158,255,0)"
-                        strokeWidth={12 / position.zoom}
-                        strokeLinecap="round"
-                        style={{ cursor: "pointer", pointerEvents: "stroke" }}
-                        onMouseEnter={(e) =>
-                          handleConnectionMouseEnter(connection, key, e)
-                        }
-                        onMouseMove={(e) =>
-                          handleConnectionMouseMove(connection, key, e)
-                        }
-                        onMouseLeave={handleConnectionMouseLeave}
-                        onClick={(e) => handleConnectionClick(connection, key, e)}
-                      />
-                      <Line
-                        from={from}
-                        to={to}
-                        stroke={CONNECTION_COLOR}
-                        strokeWidth={(isActive ? 3 : 1.5) / position.zoom}
-                        strokeLinecap="round"
-                        strokeDasharray={`${4 / position.zoom},${3 / position.zoom}`}
-                        opacity={isActive ? 1 : 0.78}
-                        pointerEvents="none"
-                      />
-                    </React.Fragment>
-                  );
-                })}
+                {!isJournalistView &&
+                  drawableConnections.map(({ connection, key, from, to }) => {
+                    const isActive =
+                      selectedConnection?.key === key || hoveredConnection?.key === key;
+                    return (
+                      <React.Fragment key={`connection-${key}`}>
+                        <Line
+                          from={from}
+                          to={to}
+                          stroke="rgba(74,158,255,0)"
+                          strokeWidth={12 / position.zoom}
+                          strokeLinecap="round"
+                          style={{ cursor: "pointer", pointerEvents: "stroke" }}
+                          onMouseEnter={(e) =>
+                            handleConnectionMouseEnter(connection, key, e)
+                          }
+                          onMouseMove={(e) =>
+                            handleConnectionMouseMove(connection, key, e)
+                          }
+                          onMouseLeave={handleConnectionMouseLeave}
+                          onClick={(e) => handleConnectionClick(connection, key, e)}
+                        />
+                        <Line
+                          from={from}
+                          to={to}
+                          stroke={CONNECTION_COLOR}
+                          strokeWidth={(isActive ? 3 : 1.5) / position.zoom}
+                          strokeLinecap="round"
+                          strokeDasharray={`${4 / position.zoom},${3 / position.zoom}`}
+                          opacity={isActive ? 1 : 0.78}
+                          pointerEvents="none"
+                        />
+                      </React.Fragment>
+                    );
+                  })}
                 {/* Source (principal) markers */}
-                {graphConnections
-                  .filter(
-                    (c) =>
-                      c.source_iso_a3 && COUNTRY_CENTROIDS[c.source_iso_a3]
-                  )
-                  .map((conn, idx) => (
-                    <Marker
-                      key={`src-marker-${idx}`}
-                      coordinates={COUNTRY_CENTROIDS[conn.source_iso_a3]}
-                    >
-                      <circle
-                        r={4 / position.zoom}
-                        fill={NODE_COLORS.Principal}
-                        stroke="#111"
-                        strokeWidth={1 / position.zoom}
-                      />
-                    </Marker>
-                  ))}
+                {!isJournalistView &&
+                  visibleConnections
+                    .filter(
+                      (c) =>
+                        c.source_iso_a3 && COUNTRY_CENTROIDS[c.source_iso_a3]
+                    )
+                    .map((conn, idx) => (
+                      <Marker
+                        key={`src-marker-${idx}`}
+                        coordinates={COUNTRY_CENTROIDS[conn.source_iso_a3]}
+                      >
+                        <circle
+                          r={4 / position.zoom}
+                          fill={NODE_COLORS.Principal}
+                          stroke="#111"
+                          strokeWidth={1 / position.zoom}
+                        />
+                      </Marker>
+                    ))}
                 {/* Target (event) markers */}
-                {graphConnections
-                  .filter(
-                    (c) =>
-                      c.target_iso_a3 && COUNTRY_CENTROIDS[c.target_iso_a3]
-                  )
-                  .map((conn, idx) => (
-                    <Marker
-                      key={`tgt-marker-${idx}`}
-                      coordinates={COUNTRY_CENTROIDS[conn.target_iso_a3]}
-                    >
-                      <circle
-                        r={4 / position.zoom}
-                        fill={NODE_COLORS.Event}
-                        stroke="#111"
-                        strokeWidth={1 / position.zoom}
-                      />
-                    </Marker>
+                {!isJournalistView &&
+                  visibleConnections
+                    .filter(
+                      (c) =>
+                        c.target_iso_a3 && COUNTRY_CENTROIDS[c.target_iso_a3]
+                    )
+                    .map((conn, idx) => (
+                      <Marker
+                        key={`tgt-marker-${idx}`}
+                        coordinates={COUNTRY_CENTROIDS[conn.target_iso_a3]}
+                      >
+                        <circle
+                          r={4 / position.zoom}
+                          fill={NODE_COLORS.Event}
+                          stroke="#111"
+                          strokeWidth={1 / position.zoom}
+                        />
+                      </Marker>
+                    ))}
+                {/* Journalist killings — vertical stack of dots per location */}
+                {isJournalistView &&
+                  killingAggregations.map((agg) => (
+                    <JournalistMarker
+                      key={`killing-${agg.iso_a3}`}
+                      agg={agg}
+                      coords={lookupCentroid(agg.iso_a3)}
+                      zoom={position.zoom}
+                      isHovered={hoveredKilling?.agg.iso_a3 === agg.iso_a3}
+                      isSelected={selectedKilling?.agg.iso_a3 === agg.iso_a3}
+                      onMouseEnter={(e) => handleKillingMouseEnter(agg, e)}
+                      onMouseMove={(e) => handleKillingMouseMove(agg, e)}
+                      onMouseLeave={handleKillingMouseLeave}
+                      onClick={(e) => handleKillingClick(agg, e)}
+                    />
                   ))}
               </>
-            )}
+              );
+            }}
           </Geographies>
         </ZoomableGroup>
       </ComposableMap>

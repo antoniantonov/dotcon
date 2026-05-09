@@ -44,6 +44,10 @@ func main() {
 		log.Fatalf("Schema migration failed: %v", err)
 	}
 
+	if err := loadIsoMap(ctx); err != nil {
+		log.Printf("Warning: failed to load iso_a2->iso_a3 map (non-fatal): %v", err)
+	}
+
 	// ── Neo4j ───────────────────────────────────────────────────────────────────
 	if err := initNeo4jDriver(); err != nil {
 		log.Fatalf("Cannot init Neo4j driver: %v", err)

@@ -46,16 +46,16 @@ type Record struct {
 		Lon float64 `json:"lon"`
 		Lat float64 `json:"lat"`
 	} `json:"coordinates"`
-	CountryGeometry    json.RawMessage `json:"country_geometry"`
-	EnquiryStatus      *string         `json:"enquiry_status"`
-	EnquiryStatusHome  *string         `json:"enquiry_status_home"`
-	EnquiryStatusMin   *string         `json:"enquiry_status_min"`
-	EnquiryStatusStat  *string         `json:"enquiry_status_stat"`
-	DateResolution     *int            `json:"date_resolution"`
-	DescriptionEN      *string         `json:"description_en"`
-	DGRequest          string          `json:"dg_request"`
-	StateResponse      string          `json:"state_response"`
-	StateAcknowledges  string          `json:"state_acknowledgements"`
+	CountryGeometry   json.RawMessage `json:"country_geometry"`
+	EnquiryStatus     *string         `json:"enquiry_status"`
+	EnquiryStatusHome *string         `json:"enquiry_status_home"`
+	EnquiryStatusMin  *string         `json:"enquiry_status_min"`
+	EnquiryStatusStat *string         `json:"enquiry_status_stat"`
+	DateResolution    *int            `json:"date_resolution"`
+	DescriptionEN     *string         `json:"description_en"`
+	DGRequest         string          `json:"dg_request"`
+	StateResponse     string          `json:"state_response"`
+	StateAcknowledges string          `json:"state_acknowledgements"`
 }
 
 // DescriptionEN parsed shape.
@@ -216,24 +216,24 @@ func parsePyList[T any](raw string) ([]T, error) {
 
 // MappedRecord is the row passed to the UNWIND Cypher write.
 type MappedRecord struct {
-	JournalistID   string                 `json:"journalist_id"`
-	JournalistProp map[string]any         `json:"journalist_props"`
-	KillingID      string                 `json:"killing_id"`
-	KillingProp    map[string]any         `json:"killing_props"`
-	CountryID      string                 `json:"country_id"`
-	CountryProp    map[string]any         `json:"country_props"`
-	HasCountry     bool                   `json:"has_country"`
-	RegionID       string                 `json:"region_id"`
-	RegionProp     map[string]any         `json:"region_props"`
-	HasRegion      bool                   `json:"has_region"`
-	PointID        string                 `json:"point_id"`
-	PointProp      map[string]any         `json:"point_props"`
-	HasPoint       bool                   `json:"has_point"`
-	Topics         []map[string]any       `json:"topics"`
-	Nationalities  []map[string]any       `json:"nationalities"`
-	Sources        []map[string]any       `json:"sources"`
-	EnquiryID      string                 `json:"enquiry_id"`
-	EnquiryProp    map[string]any         `json:"enquiry_props"`
+	JournalistID   string           `json:"journalist_id"`
+	JournalistProp map[string]any   `json:"journalist_props"`
+	KillingID      string           `json:"killing_id"`
+	KillingProp    map[string]any   `json:"killing_props"`
+	CountryID      string           `json:"country_id"`
+	CountryProp    map[string]any   `json:"country_props"`
+	HasCountry     bool             `json:"has_country"`
+	RegionID       string           `json:"region_id"`
+	RegionProp     map[string]any   `json:"region_props"`
+	HasRegion      bool             `json:"has_region"`
+	PointID        string           `json:"point_id"`
+	PointProp      map[string]any   `json:"point_props"`
+	HasPoint       bool             `json:"has_point"`
+	Topics         []map[string]any `json:"topics"`
+	Nationalities  []map[string]any `json:"nationalities"`
+	Sources        []map[string]any `json:"sources"`
+	EnquiryID      string           `json:"enquiry_id"`
+	EnquiryProp    map[string]any   `json:"enquiry_props"`
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
@@ -283,8 +283,8 @@ func mapRecord(r *Record, countriesGeo map[string]string, parseFails *int) Mappe
 
 	m.KillingID = "event:killing:" + r.UUID
 	kProps := map[string]any{
-		"event_type":          "Killing",
-		"sub_type":            "Journalist",
+		"event_type":          "Journalist Killing",
+		"sub_type":            "Journalist Killing",
 		"period_from":         r.Date,
 		"period_to":           r.Date,
 		"in_conflict_zone":    strings.EqualFold(r.ConflictZone, "true"),
@@ -736,4 +736,3 @@ func envOr(k, def string) string {
 	}
 	return def
 }
-

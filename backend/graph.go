@@ -92,6 +92,9 @@ func registerGraphRoutes(rg *gin.RouterGroup) {
 	rg.GET("/locations", graphLocationsHandler)
 	rg.GET("/events", graphEventsHandler)
 	rg.GET("/map-connections", graphMapConnectionsHandler)
+	rg.GET("/types", graphTypesHandler)
+	rg.GET("/types/:type/values", graphTypeValuesHandler)
+	rg.GET("/journalist-killings", graphJournalistKillingsHandler)
 	rg.POST("/principals", graphCreatePrincipalHandler)
 	rg.POST("/events", graphCreateEventHandler)
 	rg.POST("/relationships", graphCreateRelationshipHandler)
@@ -427,10 +430,10 @@ RETURN e, collect(distinct p) AS principals, loc, ploc`, where)
 	}
 
 	type EventItem struct {
-		Event            map[string]any   `json:"event"`
-		Principals       []map[string]any `json:"principals"`
-		EventLocation    any              `json:"event_location"`
-		PrincipalLocation any             `json:"principal_location"`
+		Event             map[string]any   `json:"event"`
+		Principals        []map[string]any `json:"principals"`
+		EventLocation     any              `json:"event_location"`
+		PrincipalLocation any              `json:"principal_location"`
 	}
 
 	items := make([]EventItem, 0, len(records))
@@ -846,6 +849,190 @@ func graphCreateRelationshipHandler(c *gin.Context) {
 	src, _ := r.Get("source")
 	tgt, _ := r.Get("target")
 	c.JSON(http.StatusOK, gin.H{"type": relType, "source": src, "target": tgt})
+}
+
+// GET /api/graph/types
+// Returns the list of node types available for the two-tier picker.
+func graphTypesHandler(c *gin.Context) {
+	out := make([]map[string]string, 0, len(allowedNodeLabels))
+	for _, l := range allowedNodeLabels {
+		out = append(out, map[string]string{"type": l, "label": l})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// Pre-built parameterised "distinct values" queries per allowed node label.
+// For Event we expose sub_type (falling back to event_type) so the user sees
+// human-readable categories like "Lobbying" or "Journalist Killing".
+// For every other label we use the node's name.
+var distinctValuesQueriesByLabel = func() map[string]string {
+	m := make(map[string]string, len(allowedNodeLabels))
+	for _, label := range allowedNodeLabels {
+		var query string
+		if label == "Event" {
+			query = `MATCH (n:Event)
+WITH coalesce(n.sub_type, n.event_type) AS v
+WHERE v IS NOT NULL AND v <> ''
+RETURN v AS value, count(*) AS count
+ORDER BY value`
+		} else {
+			query = fmt.Sprintf(`MATCH (n:%s)
+WITH coalesce(n.name, n.id) AS v
+WHERE v IS NOT NULL AND v <> ''
+RETURN v AS value, count(*) AS count
+ORDER BY value`, label)
+		}
+		m[label] = query
+	}
+	return m
+}()
+
+// GET /api/graph/types/:type/values
+// Returns the distinct values for the given node type. Used to populate the
+// second (right-hand) dropdown after the user picks a type.
+func graphTypeValuesHandler(c *gin.Context) {
+	ctx := c.Request.Context()
+	nodeType := c.Param("type")
+	if !isAllowedLabel(nodeType) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Node type '%s' is not allowed", nodeType)})
+		return
+	}
+
+	session := getNeo4jReadSession(ctx)
+	defer session.Close(ctx)
+
+	result, err := session.Run(ctx, distinctValuesQueriesByLabel[nodeType], nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	records, err := result.Collect(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	values := make([]map[string]any, 0, len(records))
+	for _, rec := range records {
+		v, _ := rec.Get("value")
+		count, _ := rec.Get("count")
+		values = append(values, map[string]any{
+			"value": toPlain(v),
+			"count": toPlain(count),
+		})
+	}
+	c.JSON(http.StatusOK, values)
+}
+
+// GET /api/graph/journalist-killings
+// Returns one item per individual killing event, with the location it occurred
+// in and the journalist's name. The frontend aggregates per-location to draw
+// the 3D bar markers and lists names in the popup.
+func graphJournalistKillingsHandler(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	session := getNeo4jReadSession(ctx)
+	defer session.Close(ctx)
+
+	// Match either by sub_type or event_type for robustness.
+	// Pull the journalist name either from the Event itself (hand-written seed
+	// in 03-journalists.cypher) or from the linked Journalist node (fej001
+	// ingest writes `(e)-[:TARGETED]->(:Journalist)` and stores `name` there).
+	query := `MATCH (e:Event)-[:OCCURRED_IN]->(loc:Location)
+WHERE e.sub_type = "Journalist Killing" OR e.event_type = "Journalist Killing"
+OPTIONAL MATCH (e)-[:TARGETED]->(j:Journalist)
+RETURN e, loc, j.name AS journalist_node_name,
+       e.area_coverage AS area_coverage,
+       e.conflict_zone_label AS conflict_zone_label,
+       e.in_conflict_zone AS in_conflict_zone
+ORDER BY e.period_from`
+
+	result, err := session.Run(ctx, query, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	records, err := result.Collect(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	killings := make([]map[string]any, 0, len(records))
+	for _, rec := range records {
+		eRaw, _ := rec.Get("e")
+		event, ok := eRaw.(dbtype.Node)
+		if !ok {
+			continue
+		}
+		locRaw, _ := rec.Get("loc")
+		loc, ok := locRaw.(dbtype.Node)
+		if !ok {
+			continue
+		}
+
+		journalistName, _ := event.Props["journalist_name"].(string)
+		if journalistName == "" {
+			// fej001 ingest puts the name on the Journalist node, not the Event.
+			if jn, ok := rec.Get("journalist_node_name"); ok {
+				if s, ok := jn.(string); ok {
+					journalistName = s
+				}
+			}
+		}
+		if journalistName == "" {
+			// Final fallback to the event label so the popup is never empty.
+			if lbl, ok := event.Props["label"].(string); ok {
+				journalistName = lbl
+			}
+		}
+		eventID, _ := event.Props["id"].(string)
+		locName, _ := loc.Props["name"].(string)
+		locIso, _ := loc.Props["iso_a3"].(string)
+		locID, _ := loc.Props["id"].(string)
+
+		// Derive a human-readable "reason" for the killing. Prefer the
+		// topical area_coverage (Crime / Corruption / Environment / …) when
+		// present; otherwise fall back to the conflict-zone label so we
+		// never return a totally empty reason for fej001-ingested rows.
+		var reason string
+		if ac, ok := event.Props["area_coverage"].(string); ok && ac != "" {
+			reason = ac
+		}
+		if reason == "" {
+			if czl, ok := event.Props["conflict_zone_label"].(string); ok && czl != "" {
+				reason = czl
+			}
+		}
+		if reason == "" {
+			if b, ok := event.Props["in_conflict_zone"].(bool); ok && b {
+				reason = "Conflict Zone"
+			}
+		}
+
+		// Fej001-ingested countries only carry iso_a2; derive iso_a3 from the
+		// PG-backed lookup so the frontend (keyed by iso_a3) can render them.
+		if locIso == "" {
+			if a2, ok := loc.Props["iso_a2"].(string); ok && a2 != "" {
+				if a3, found := isoA2ToA3[strings.ToUpper(a2)]; found {
+					locIso = a3
+				}
+			}
+		}
+
+		killings = append(killings, map[string]any{
+			"event_id":        eventID,
+			"journalist_name": journalistName,
+			"location_id":     locID,
+			"location_name":   locName,
+			"iso_a3":          locIso,
+			"period_from":     toPlain(event.Props["period_from"]),
+			"period_to":       toPlain(event.Props["period_to"]),
+			"reason":          reason,
+		})
+	}
+
+	c.JSON(http.StatusOK, killings)
 }
 
 // filterStrings converts []any to []string, dropping nil/non-string entries.
