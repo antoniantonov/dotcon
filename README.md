@@ -85,3 +85,6 @@ Neo4j data is persisted in the `data/neo4j/` directory (git-ignored). Constraint
 │       └── init/           # Cypher constraints and seed data
 └── data/                   # Data volumes (git-ignored)
 ```
+
+<img width="1793" height="927" alt="image" src="https://github.com/user-attachments/assets/c23b8438-dd67-45bb-a9d1-24491a91ccde" />
+
