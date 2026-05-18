@@ -63,6 +63,7 @@ const NODE_COLORS = {
 };
 
 const CONNECTION_COLOR = "#4a9eff";
+const PICKER_TYPE_ALLOWLIST = new Set(["Event", "Principal"]);
 
 const STYLE_DEFAULT = {
   fill: "#222",
@@ -898,7 +899,11 @@ function WorldMap({ countries, nameAliases = {} }) {
   useEffect(() => {
     fetch(`${API_URL}/api/graph/types`)
       .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setAvailableTypes(Array.isArray(data) ? data : []))
+      .then((data) =>
+        setAvailableTypes(
+          Array.isArray(data) ? data.filter((t) => PICKER_TYPE_ALLOWLIST.has(t.type)) : []
+        )
+      )
       .catch(() => setAvailableTypes([]));
   }, []);
 
